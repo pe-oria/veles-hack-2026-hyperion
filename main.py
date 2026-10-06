@@ -89,6 +89,16 @@ async def retrieve_for(text: str, session: Session) -> tuple[float | None, rag.H
     return (raw[0][1] if raw else None), contextual
 
 
+async def classify(text: str, session: Session) -> tuple[router.Route, float | None, rag.Hits]:
+    """The route we act on: router verdict, corrected by the guardrail. Also used by the evals."""
+    route = await router.route(text, session)
+    similarity, hits = None, []
+    if route.intent == "off_topic" or (route.intent == "question" and not route.about_conversation):
+        similarity, hits = await retrieve_for(text, session)
+        route = guardrails.apply(route, text, similarity, hits[0][1] if hits else None)
+    return route, similarity, hits
+
+
 async def run_turn(text: str, session: Session) -> AsyncIterator[fileops.Event]:
     """Yield the text increments (str) and IDE actions (dict) of one reply. Python owns the control flow."""
     if not text.strip():
@@ -117,11 +127,7 @@ async def run_turn(text: str, session: Session) -> AsyncIterator[fileops.Event]:
         yield prompts.NOTHING_PENDING
         return
 
-    route = await router.route(text, session)
-    similarity, hits = None, []
-    if route.intent == "off_topic" or (route.intent == "question" and not route.about_conversation):
-        similarity, hits = await retrieve_for(text, session)
-        route = guardrails.apply(route, text, similarity, hits[0][1] if hits else None)
+    route, similarity, hits = await classify(text, session)
     log.info(
         "intent=%s similarity=%s slots=%s",
         route.intent,
