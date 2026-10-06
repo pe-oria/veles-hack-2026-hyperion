@@ -34,6 +34,8 @@ def apply(
     previous question. Either score may keep a question alive: "why?" is nothing on its own.
     """
     if route.intent == "off_topic":
+        if is_injection(text):
+            return route
         if mentions_domain(text) or (similarity is not None and similarity >= RESCUE_MIN):
             return route.model_copy(update={"intent": "question"})
     elif route.intent == "question" and not route.about_conversation:
@@ -52,6 +54,46 @@ _DESCRIPTOR = re.compile(r"\b(descriptors?|profiles?|manifests?|ya?ml|deployment
 _CREATE_CUE = re.compile(r"\b(for|need|want|give me|write|generate|make|create|new|draft|prepare|set up)\b", re.IGNORECASE)
 
 
+# Whether Hyperion writes files that are not HyperAI descriptors (README, hello.py, notes.txt).
+# Kept on until the mentor answers the scope question; set to False to refuse them as off-topic.
+ALLOW_GENERIC_FILES = True
+
+# Words that also have a technical meaning are left out or guarded: "user stories", "speech
+# recognition", "resume the workflow", "cv" (computer vision), and the docs' own "cookbook recipes".
+_NON_TECHNICAL = re.compile(
+    r"\b(poems?|poetry|haikus?|limericks?|sonnets?|(?<!user )stor(?:y|ies)|fairy ?tales?|novels?|songs?|lyrics|"
+    r"(?<!cookbook )recipes?|jokes?|riddles?|essays?|(?:love |cover )letters?|letter to|horoscopes?|homework|"
+    r"tweets?|blog posts?|diary|journal entry|shopping list|grocery list|biography|trivia|quiz)\b",
+    re.IGNORECASE,
+)
+
+
+_INJECTION = re.compile(
+    r"\b(?:ignore|disregard|forget|override|bypass)\b.{0,40}\b(?:instructions?|rules?|prompts?|guidelines|restrictions|guardrails)\b"
+    r"|\b(?:system|initial|hidden|developer) prompt\b"
+    r"|\b(?:pretend|act|behave|role-?play)\b.{0,20}\b(?:as|you are|to be|like)\b"
+    r"|\byou are now\b|\bjailbreak\b|\bDAN mode\b",
+    re.IGNORECASE,
+)
+
+
+def is_injection(text: str) -> bool:
+    """An attempt to change what Hyperion is: "ignore your instructions", "pretend you are ..."."""
+    return bool(_INJECTION.search(text))
+
+
+def writes_off_topic_content(route: Route, text: str) -> bool:
+    """A file request whose content has nothing to do with HyperAI: "a file with a poem about cats"."""
+    if route.intent not in ("create_file", "edit_file"):
+        return False
+    if _NON_TECHNICAL.search(f"{text} {route.description or ''}") and "cookbook" not in text.lower():
+        return True
+    if not ALLOW_GENERIC_FILES and route.intent == "create_file":
+        named = _FILE_NAME.search(text)
+        return bool(named) and not named.group(0).lower().endswith((".yaml", ".yml"))
+    return False
+
+
 def asks_for_a_new_descriptor(route: Route, text: str, session: Session) -> bool:
     """A read_file verdict for a file that cannot exist: "I need a descriptor for X"."""
     if _FILE_NAME.search(text) or _READ_VERB.search(text):
@@ -66,6 +108,11 @@ def correct(route: Route, text: str, session: Session) -> Route:
     """Deterministic repairs of the router's verdict, applied before anything acts on it."""
     if route.intent == "read_file" and asks_for_a_new_descriptor(route, text, session):
         route = route.model_copy(update={"intent": "create_file", "path": None})
+    if writes_off_topic_content(route, text):
+        return route.model_copy(update={"intent": "off_topic"})
+    if route.intent in ("smalltalk", "question") and is_injection(text):
+        # the router is unsure whether these are chit-chat; they get the refusal, never an answer
+        return route.model_copy(update={"intent": "off_topic"})
     if route.intent == "create_file":
         updates: dict = {}
         if not route.image:

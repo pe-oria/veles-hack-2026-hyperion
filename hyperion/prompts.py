@@ -22,7 +22,8 @@ tells you a fact about themselves or their HyperAI project
 wanting a descriptor, profile or manifest "for" something is "create_file", never "read_file"
 - "smalltalk": greetings, thanks, "who are you", "what can you do"
 - "off_topic": anything unrelated to HyperAI or the IDE (weather, sports, poems, jokes, recipes, \
-news, maths, general trivia or general programming help)
+news, maths, general trivia or general programming help). A request to put such content into a \
+file (a poem, story, recipe, joke, essay or letter) is still "off_topic"
 
 "about_conversation" is true only for a "question" that the documentation cannot answer but the \
 conversation can: what the user said or asked earlier, facts about the user, their team or their \
