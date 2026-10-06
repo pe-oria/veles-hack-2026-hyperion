@@ -1,12 +1,26 @@
+# Secrets — never commit (ship .env.example instead)
+.env
+
+# Python-generated files
 __pycache__/
 *.py[cod]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
 .venv/
 venv/
-.env
-.idea/
-.DS_Store
+
+# Caches
+.cache/
 .pytest_cache/
 .ruff_cache/
 .ipynb_checkpoints/
+
+# Local / IDE
+.idea/
+.DS_Store
 data/raw/
 *.log

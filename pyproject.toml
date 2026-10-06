@@ -1,18 +1,22 @@
 [project]
-name = "veles"
+name = "hyperion"
 version = "0.1.0"
-requires-python = ">=3.11"
-
-[build-system]
-requires = ["setuptools>=61"]
-build-backend = "setuptools.build_meta"
-
-[tool.setuptools.packages.find]
-where = ["src"]
+description = "Hyperion — an agentic microservice for the HyperAI IDE"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "fastapi>=0.115",
+    "httpx>=0.28.1",
+    "langchain-openai>=1.6.1",
+    "python-dotenv>=1.2.3",
+    "uvicorn>=0.34",
+]
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+pythonpath = ["."]
 testpaths = ["tests"]
 
-[tool.ruff]
-line-length = 100
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]

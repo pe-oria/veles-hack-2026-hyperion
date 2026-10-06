@@ -1,0 +1,12 @@
+.env
+.venv
+__pycache__/
+*.py[oc]
+.git
+.idea
+.pytest_cache
+.cache
+docs
+notebooks
+data
+tests
