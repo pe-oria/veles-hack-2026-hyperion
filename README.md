@@ -19,11 +19,31 @@ Apple Silicon.
 | Challenge criterion | How Hyperion meets it |
 |---|---|
 | Working microservice | `POST :8000/chat` streams Server-Sent Events: text increments and IDE actions |
-| Natural language → IDE actions | create / edit / delete files and folders, validate and read files |
-| Guardrails | off-topic requests get a fixed refusal; the verdict is cross-checked against the knowledge base |
+| Natural language → IDE actions | create / edit / delete descriptors and folders, validate and read files |
+| Several requests in one message | "create a folder demo and put an nginx YAML in it" is split into steps that run in order; a step that needs a confirmation pauses the rest |
+| Guardrails | only HyperAI and its descriptors: jokes, general technology questions ("What is Docker?"), scripts and other files, and prompt injection get a fixed refusal |
 | RAG | answers come only from retrieved excerpts of `knowledge/`, with the source documents listed |
-| Memory | per-`user_id` history, last file and created files; follow-ups like "change the memory to 2Gi" work |
+| Memory | per-`user_id` history, last file and created files; "change the memory to 2Gi" and "do the same for redis" work |
 | Human in the loop | delete and overwrite wait for an explicit "yes" |
+
+### Measured
+
+Our own evaluation sets, run against the live model (`scripts/eval_router.py`, `scripts/eval_e2e.py`;
+reports in `docs/eval/`). The `test` split is held out from prompt tuning, but it is our own set and
+some of its failures were seen while fixing bugs, so read it as an upper bound.
+
+| | Baseline (M5) | Now |
+|---|---|---|
+| Routing decision, `test` split | 37/45 (82%) | 52/54 (96%) |
+| Routing decision, all cases | 87/109 (80%) | 131/133 (98%) |
+| Multi-step requests routed correctly | 0/15 | 20/20 |
+| End-to-end turns fully correct | 43/55 (78%) | 71/71 (100%) |
+| Generated YAML valid on the first pass | 22/22 | 25/25 |
+| Latency per turn, p50 / p95 | 1.3 s / 2.5 s | 0.9 s / 2.4 s |
+
+The two remaining `test` misses are real HyperAI questions that the tightened guardrail now refuses
+("Which registries am I allowed to pull container images from?"). Probing with phrasings outside
+these sets still finds mistakes: the sets measure regressions, they do not prove robustness.
 
 ## Demo
 
@@ -73,7 +93,10 @@ flowchart TD
     IDE["HyperAI IDE (browser)"] -- "POST /chat {user_id, text}" --> S["Session(user_id)<br/>history · last file · pending action"]
     S --> P{"action waiting<br/>for confirmation?"}
     P -- "yes / no (rules, no LLM)" --> X["execute or cancel"]
-    P -- "nothing pending" --> R["Router<br/>LLM · JSON mode · few-shot · T=0<br/>intent + slots"]
+    P -- "nothing pending" --> M{"several requests?<br/>regex gate"}
+    M -- "yes" --> PL["Planner<br/>LLM rewrites the message into steps<br/>each step runs through the path below"]
+    PL --> R
+    M -- "no" --> R["Router<br/>LLM · JSON mode · few-shot · T=0<br/>intent + slots"]
     R --> G{"Guardrail<br/>router verdict × knowledge-base similarity"}
     G -- off-topic --> REF["fixed refusal"]
     G -- question --> RAG["RAG<br/>embed → top-k chunks → grounded answer + sources"]
@@ -103,6 +126,16 @@ Design decisions worth knowing:
 - **Nothing the model invents is acted on.** A path from the router, or a value from parameter
   extraction, is only used if the user actually wrote it (or it is a file this session created).
   The 8B model otherwise makes up file names and copies values from its few-shot examples.
+- **A missing image is asked for, never invented.** "Create a deployment YAML for my web service"
+  gets "Which container image should I use?", and the answer completes the request.
+- **Multi-step without an agent loop.** A regex gate spots messages that may ask for several things;
+  one LLM call rewrites them into self-contained steps, and Python runs the steps in order. A plan
+  that states a number, file name or image the user never gave is thrown away.
+- **Scope is enforced by rules, not only by the model.** HyperAI-specific terms are told apart from
+  generic IT words, because embedding similarity cannot separate "What is Docker?" from a real
+  question. Non-descriptor files are refused in the guardrail and again in the file handlers.
+- **Every model call has a hard deadline**, so a request the shared server leaves hanging fails the
+  turn with a message instead of blocking the service.
 - **Confirmation is rule-based.** Only an unambiguous, whole-message agreement executes a pending
   delete or overwrite; "yes, but…" or any other reply drops it.
 - **Sources are appended by code**, from the retrieval scores, not written by the model.
@@ -115,7 +148,8 @@ hyperion/
   llm.py             chat / JSON / embedding clients for legion1, plain-text streaming
   session.py         in-memory state per user_id
   router.py          intent + slot extraction
-  guardrails.py      off-topic detection
+  planner.py         multi-step requests: gate, split into steps, faithfulness checks
+  guardrails.py      scope: off-topic, general questions, non-descriptor files, injection
   rag.py             chunking, embedding index, retrieval, source selection
   yamlgen.py         parameter extraction, YAML templates, edit and repair passes
   fileops.py         handlers for the file intents, validate-and-repair loop
@@ -124,8 +158,9 @@ hyperion/
   ide.py             read-only client for the IDE backend
   prompts.py         every prompt and fixed reply
 knowledge/           RAG corpus: HYPER-AI deliverables + IDE tutorial pages
-scripts/             fetch_docs, eval_router, eval_rag, ide_sim
-tests/               pytest suite (no network needed) + acceptance prompts
+scripts/             fetch_docs, eval_router, eval_e2e, eval_rag, ide_sim
+tests/               pytest suite (no network needed), eval sets, acceptance prompts
+docs/eval/           evaluation reports, from the baseline onwards
 ```
 
 ## Run it
@@ -199,7 +234,8 @@ always relative to the workspace; absolute paths and `..` are refused.
 
 ```bash
 uv run pytest                           # unit tests, no network
-uv run python scripts/eval_router.py    # router vs. the live model on held-out phrasings
+uv run python scripts/eval_router.py    # routing decision vs. the live model (--split dev|test|all)
+uv run python scripts/eval_e2e.py       # multi-turn scenarios against the running agent + ide-backend
 uv run python scripts/eval_rag.py       # retrieval scores, used to pick the thresholds
 ```
 
@@ -212,6 +248,10 @@ uv run python scripts/eval_rag.py       # retrieval scores, used to pick the thr
 - The IDE backend has no "list files" endpoint for agents, so Hyperion only knows the files it
   created or was asked about in the session.
 - Answers are limited to what is in `knowledge/`; anything else gets "I don't know".
+- The scope guardrail errs on the side of refusing: a HyperAI question that uses no HyperAI term and
+  is phrased unlike the documentation can be refused.
+- The multi-step gate is a list of verbs and patterns; an unusual phrasing of a two-part request
+  runs only its first part.
 - Confirmation words are English (plus a few common yes/no words in other languages).
 
 ## License
