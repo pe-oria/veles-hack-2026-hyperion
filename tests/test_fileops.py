@@ -1,6 +1,6 @@
 import pytest
 
-from hyperion import actions, fileops, ide, yamlgen
+from hyperion import actions, fileops, ide, prompts, yamlgen
 from hyperion.actions import PathError
 from hyperion.ide import File, IdeError
 from hyperion.router import Route
@@ -62,8 +62,8 @@ def fake_llm(monkeypatch) -> dict:
     """Stand-ins for the three LLM passes; tests override the entries they care about."""
     state = {"params": {}, "edit": lambda content, text: content, "repair": lambda content, errors: content}
 
-    async def extract_params(text, kind, image_hint):
-        return clean_params(state["params"], kind, image_hint)
+    async def llm_params(text):
+        return dict(state["params"])
 
     async def edit(content, instruction):
         return state["edit"](content, instruction)
@@ -71,7 +71,7 @@ def fake_llm(monkeypatch) -> dict:
     async def repair(content, errors):
         return state["repair"](content, errors)
 
-    monkeypatch.setattr(yamlgen, "extract_params", extract_params)
+    monkeypatch.setattr(yamlgen, "llm_params", llm_params)
     monkeypatch.setattr(yamlgen, "edit", edit)
     monkeypatch.setattr(yamlgen, "repair", repair)
     return state
@@ -99,6 +99,38 @@ async def test_create_file_renders_a_valid_profile_and_validates_it(workspace):
         "Creating nginx.yaml - a native application profile for nginx:latest.\n\nValidating with the IDE... passed."
     )
     assert session.last_file == "nginx.yaml" and session.files == ["nginx.yaml"]
+
+
+async def test_no_image_means_a_question_not_an_nginx_placeholder(workspace):
+    session = Session()
+    reply, done = await run(workspace, session, "create a deployment yaml for my web service", intent="create_file")
+    assert done == [] and reply == prompts.ASK_IMAGE and workspace.files == {}
+    assert session.pending_create.text == "create a deployment yaml for my web service"
+
+    waiting, session.pending_create = session.pending_create, None
+    reply, done = "", []
+    async for event in fileops.resume_create(waiting, "postgres:16", session):
+        if isinstance(event, dict):
+            workspace.apply(event)
+            done.append(event)
+        else:
+            reply += event
+    assert [event["path"] for event in done] == ["postgres.yaml"]
+    assert 'uri: "postgres"' in done[0]["content"] and 'tag: "16"' in done[0]["content"]
+    assert reply.startswith("Creating postgres.yaml - a native application profile for postgres:16.")
+
+
+async def test_a_template_request_may_use_a_placeholder_and_says_so(workspace):
+    reply, done = await run(workspace, Session(), "give me an example application profile", intent="create_file")
+    assert len(done) == 1 and 'uri: "nginx"' in done[0]["content"]
+    assert "I had to assume them: specs.runtime.containerImage (nginx)" in reply
+
+
+async def test_bare_image_names_are_found_without_the_router_slot(workspace):
+    _, done = await run(workspace, Session(), "Make a postgres application profile with 2Gi of memory",
+                        intent="create_file", app_kind="native")
+    assert done[0]["path"] == "postgres.yaml"
+    assert 'uri: "postgres"' in done[0]["content"] and 'memory: "2Gi"' in done[0]["content"]
 
 
 async def test_create_file_in_a_named_folder_and_with_an_explicit_path(workspace):
@@ -259,7 +291,7 @@ async def test_invented_paths_are_ignored(workspace):
     # the router made up a location from earlier turns: the user named neither folder nor file
     _, done = await run(workspace, session, "write a descriptor for an ESP32 sensor", intent="create_file",
                         path="apps/esp32-s3-temp.yaml", app_kind="device")
-    assert done[0]["path"] == "my-app.yaml"
+    assert done[0]["path"] == "my-app.yaml" and "esp32Binary" in done[0]["content"]
 
     workspace.files["keep.yaml"] = "x"
     reply, done = await run(workspace, Session(), "Delete it", intent="delete_file", path="keep.yaml")

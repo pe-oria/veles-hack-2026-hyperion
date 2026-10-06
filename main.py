@@ -13,7 +13,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger("hyperion")
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
-from hyperion import confirm, fileops, guardrails, ide, llm, prompts, rag, router  # noqa: E402
+from hyperion import confirm, fileops, guardrails, ide, llm, prompts, rag, router, yamlgen  # noqa: E402
 from hyperion.session import Session, get_session  # noqa: E402
 
 
@@ -91,7 +91,7 @@ async def retrieve_for(text: str, session: Session) -> tuple[float | None, rag.H
 
 async def classify(text: str, session: Session) -> tuple[router.Route, float | None, rag.Hits]:
     """The route we act on: router verdict, corrected by the guardrail. Also used by the evals."""
-    route = await router.route(text, session)
+    route = guardrails.correct(await router.route(text, session), text, session)
     similarity, hits = None, []
     if route.intent == "off_topic" or (route.intent == "question" and not route.about_conversation):
         similarity, hits = await retrieve_for(text, session)
@@ -126,6 +126,21 @@ async def run_turn(text: str, session: Session) -> AsyncIterator[fileops.Event]:
         log.info("intent=confirmation decision=%s pending=None", confirm.classify(text))
         yield prompts.NOTHING_PENDING
         return
+
+    # 2. we asked which container image to use: a short answer completes that create
+    if session.pending_create:
+        waiting, session.pending_create = session.pending_create, None
+        image = yamlgen.image_from_reply(text)
+        if image:
+            log.info("intent=create_file (resumed) image=%s", image)
+            async for event in fileops.resume_create(waiting, image, session):
+                yield event
+            return
+        if yamlgen.wants_template(text):
+            log.info("intent=create_file (resumed) with a placeholder image")
+            async for event in fileops.handle(waiting.route, f"{waiting.text} ({text})", session):
+                yield event
+            return
 
     route, similarity, hits = await classify(text, session)
     log.info(

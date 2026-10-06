@@ -267,5 +267,49 @@ def test_error_after_partial_output_starts_on_its_own_line(monkeypatch):
     assert reply.endswith("\n\n" + prompts.LLM_ERROR) and reply.startswith("The connectors")
 
 
+def test_naming_the_image_completes_the_waiting_create(monkeypatch):
+    from hyperion import ide, yamlgen
+
+    async def no_params(text):
+        return {}
+
+    async def nothing_there(path):
+        return None
+
+    async def saved(path, content, timeout=None):
+        return True
+
+    async def valid(path):
+        return {"path": path, "type": "native", "valid": True, "errors": [], "warnings": []}
+
+    monkeypatch.setattr(yamlgen, "llm_params", no_params)
+    monkeypatch.setattr(ide, "find", nothing_there)
+    monkeypatch.setattr(ide, "wait_for_content", saved)
+    monkeypatch.setattr(ide, "validate", valid)
+    set_route(monkeypatch, intent="create_file", app_kind="native")
+
+    assert post("create a deployment yaml for my web service") == [prompts.ASK_IMAGE]
+    response = client.post("/chat", json={"user_id": "u1", "text": "postgres:16"})
+    events = [json.loads(e.removeprefix("data: ")) for e in response.text.split("\n\n") if e and "[DONE]" not in e]
+    created = [event for event in events if event.get("action") == "create_file"]
+    assert [event["path"] for event in created] == ["postgres.yaml"]
+    assert 'tag: "16"' in created[0]["content"]
+    assert session.get_session("u1").pending_create is None
+
+
+def test_any_other_message_drops_the_waiting_create(monkeypatch, fake_llm):
+    from hyperion import yamlgen
+
+    async def no_params(text):
+        return {}
+
+    monkeypatch.setattr(yamlgen, "llm_params", no_params)
+    set_route(monkeypatch, intent="create_file", app_kind="native")
+    assert post("create a deployment yaml for my web service") == [prompts.ASK_IMAGE]
+    set_route(monkeypatch, intent="question")
+    assert text_of(post("What is HyperAI?")).startswith("Hello world")
+    assert session.get_session("u1").pending_create is None
+
+
 def test_chat_rejects_malformed_body():
     assert client.post("/chat", json={"text": "hi"}).status_code == 422

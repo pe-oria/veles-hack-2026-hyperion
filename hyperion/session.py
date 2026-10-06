@@ -14,6 +14,7 @@ MAX_CHARS = 1200  # per stored message
 class Session:
     history: list[tuple[str, str]] = field(default_factory=list)  # (role, text)
     pending_action: "Pending | None" = None  # a destructive action awaiting the user's "yes"
+    pending_create: object | None = None  # fileops.PendingCreate: a create waiting for an image name
     last_file: str | None = None
     files: list[str] = field(default_factory=list)  # there is no "list files" endpoint: we keep track
     last_folder: str | None = None

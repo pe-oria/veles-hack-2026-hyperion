@@ -120,3 +120,93 @@ async def test_extraction_survives_a_model_that_writes_a_manifest_instead(monkey
     text = "Create a deployment YAML for a service using the nginx:1.27 Docker image with 4Gi of memory on port 8080"
     params = await yamlgen.extract_params(text, "native", "nginx:1.27")
     assert (params.kind, params.image, params.tag, params.memory, params.port) == ("native", "nginx", "1.27", "4Gi", 8080)
+
+
+import pytest  # noqa: E402
+
+
+@pytest.mark.parametrize(
+    "text, image",
+    [
+        ("Make a postgres application profile with 2Gi of memory", "postgres"),
+        ("I need a descriptor for a mongo database listening on 27017", "mongo"),
+        ("generate a manifest for an httpd web server with 500m cpu", "httpd"),
+        ("a profile for a PostgreSQL database", "postgres"),
+        ("deploy mongodb please", "mongo"),
+        ("an apache web server profile", "httpd"),
+        ("Create a deployment YAML for a service using the nginx Docker image", "nginx"),
+        ("write an app profile for myuser/app:1.2 and save it as services/app.yaml", "myuser/app:1.2"),
+        ("a profile for ghcr.io/acme/api listening on 8080", "ghcr.io/acme/api"),
+        ("profile for localhost:5000/team/api:2", "localhost:5000/team/api:2"),
+        ("a deployment for the kafka/broker image", "kafka/broker"),
+        ("deployment yaml for redis:7.2.", "redis:7.2"),
+        ("a deployment file for mariadb 11", "mariadb:11"),
+        ("run the eclipse-mosquitto image on node rpi-7", "eclipse-mosquitto"),
+        ("device app running the hello-world Docker image", "hello-world"),
+        ("a nodejs api", "node"),
+    ],
+)
+def test_guess_image_reads_explicit_and_well_known_names(text, image):
+    assert yamlgen.guess_image(text) == (image, True)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "create a deployment yaml for my web service",
+        "put the profile in demo/redis.yaml",  # a path, and redis.yaml is a file name
+        "the apk is at https://acme.io/cam.apk",
+        "register it on node rpi-7",
+        "What is a DeviceNode?",
+        "save it under services/api",
+        "expose it on port:8080",
+        "a descriptor for a web server",
+    ],
+)
+def test_guess_image_does_not_invent(text):
+    assert yamlgen.guess_image(text) is None
+
+
+def test_loose_wording_is_a_reported_guess():
+    assert yamlgen.guess_image("a profile for a clickhouse database") == ("clickhouse", False)
+    params = yamlgen.build_params({}, "a profile for a clickhouse database", "native", None)
+    assert params.image == "clickhouse" and params.image_guessed and not params.image_missing
+    assert any("my reading of your request" in item for item in params.placeholders)
+
+
+def test_build_params_names_the_file_after_the_image_and_never_falls_back_to_nginx():
+    params = yamlgen.build_params({"name": "pg-main"}, "Make a postgres application profile with 2Gi of memory", "native", None)
+    assert (params.image, params.memory, params.port, params.name, params.file_stem) == (
+        "postgres", "2Gi", 5432, "pg-main", "postgres")
+    assert not params.image_missing and params.placeholders == []
+
+    missing = yamlgen.build_params({}, "create a deployment yaml for my web service", "native", None)
+    assert missing.image_missing
+
+
+def test_explicit_reference_beats_the_models_reading():
+    params = yamlgen.build_params({"image": "billing", "tag": "latest"},
+                                  "an application profile for the acme/billing:3.0 container on port 9000", None, "billing")
+    assert (params.image, params.tag, params.file_stem, params.port) == ("acme/billing", "3.0", "billing", 9000)
+
+
+def test_workload_is_read_from_the_text_even_if_the_model_misses_it():
+    esp = yamlgen.build_params({}, "write a descriptor for an ESP32-S3 temperature sensor firmware", None, None)
+    assert (esp.kind, esp.workload_kind, esp.image_missing) == ("device", "esp32Binary", False)
+    apk = yamlgen.build_params({}, "manifest for our Android app", "native", None)
+    assert (apk.kind, apk.workload_kind) == ("device", "AndroidApk")
+
+
+@pytest.mark.parametrize(
+    "reply, image",
+    [("postgres:16", "postgres:16"), ("use redis", "redis"), ("the nginx image please", "nginx"),
+     ("myuser/app:1.2", "myuser/app:1.2"), ("clickhouse", "clickhouse"), ("it's ghcr.io/acme/api", "ghcr.io/acme/api")],
+)
+def test_image_from_reply_accepts_short_answers(reply, image):
+    assert yamlgen.image_from_reply(reply) == image
+
+
+@pytest.mark.parametrize("reply", ["What is HyperAI?", "cancel", "no", "never mind, tell me about open connectors instead",
+                                   "I do not know yet", ""])
+def test_image_from_reply_ignores_everything_else(reply):
+    assert yamlgen.image_from_reply(reply) is None

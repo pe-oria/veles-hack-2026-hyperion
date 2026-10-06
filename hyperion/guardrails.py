@@ -2,7 +2,9 @@
 
 import re
 
+from hyperion import yamlgen
 from hyperion.router import Route
+from hyperion.session import Session
 
 # An 8B router sometimes calls unfamiliar HyperAI jargon off-topic; these terms veto that.
 _DOMAIN = re.compile(
@@ -38,4 +40,24 @@ def apply(
         scores = [score for score in (similarity, follow_up_similarity) if score is not None]
         if scores and max(scores) < REFUSE_BELOW and not mentions_domain(text):
             return route.model_copy(update={"intent": "off_topic"})
+    return route
+
+
+_DEVICE_WORDS = re.compile(r"\b(device|edge|android|apk|esp[\s-]?32\w*|firmware|microcontroller)\b", re.IGNORECASE)
+
+
+def correct(route: Route, text: str, session: Session) -> Route:
+    """Deterministic repairs of the router's verdict, applied before anything acts on it."""
+    if route.intent == "create_file":
+        updates: dict = {}
+        if not route.image:
+            # the 8B router only fills `image` when the word "image" is there; names are easy to read
+            guess = yamlgen.guess_image(text)
+            if guess and guess[1]:
+                updates["image"] = guess[0]
+        if not route.app_kind:
+            # the documented default: a device app only when the user says so
+            updates["app_kind"] = "device" if _DEVICE_WORDS.search(text) else "native"
+        if updates:
+            route = route.model_copy(update=updates)
     return route

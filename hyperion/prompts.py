@@ -119,6 +119,11 @@ SMALLTALK = (
     "for a service using the nginx Docker image\"."
 )
 
+ASK_IMAGE = (
+    "Which container image should I use? For example nginx:1.27 or myuser/app:1.0. "
+    "(Say \"use a placeholder\" if you only want a template.)"
+)
+
 EMPTY_MESSAGE = "Please type a question about HyperAI, or tell me which file to create, edit or delete."
 
 CONFIRM_HINT = "(yes/no)"

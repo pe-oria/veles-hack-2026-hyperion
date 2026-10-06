@@ -74,3 +74,23 @@ def test_guardrail_follow_up_score_keeps_questions_but_never_rescues_off_topic()
     assert guardrails.apply(question, "why?", similarity=0.4, follow_up_similarity=0.7).intent == "question"
     assert guardrails.apply(question, "why?", similarity=0.4, follow_up_similarity=0.5).intent == "off_topic"
     assert guardrails.apply(off, "Tell me a joke", similarity=0.49, follow_up_similarity=0.8).intent == "off_topic"
+
+
+def test_correct_fills_the_image_slot_the_router_left_empty():
+    session = Session()
+    created = guardrails.correct(Route(intent="create_file"), "Make a postgres application profile with 2Gi of memory", session)
+    assert created.image == "postgres"
+    kept = guardrails.correct(Route(intent="create_file", image="redis"), "a redis profile, not postgres", session)
+    assert kept.image == "redis"
+    # a loose guess is not written into the route, and other intents are left alone
+    assert guardrails.correct(Route(intent="create_file"), "a profile for a clickhouse database", session).image is None
+    assert guardrails.correct(Route(intent="question"), "what is the nginx image?", session).image is None
+
+
+def test_correct_applies_the_default_app_kind():
+    session = Session()
+    assert guardrails.correct(Route(intent="create_file"), "an application profile for a redis container", session).app_kind == "native"
+    assert guardrails.correct(Route(intent="create_file"), "firmware manifest for an ESP32-C3 door sensor", session).app_kind == "device"
+    assert guardrails.correct(Route(intent="create_file"), "run mosquitto on an edge device", session).app_kind == "device"
+    stated = Route(intent="create_file", app_kind="device")
+    assert guardrails.correct(stated, "a profile for redis", session).app_kind == "device"

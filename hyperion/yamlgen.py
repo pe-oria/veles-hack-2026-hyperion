@@ -20,8 +20,44 @@ KNOWN_IMAGES: dict[str, tuple[int, str, list[str]]] = {
     "redis": (6379, "redis-server", []),
     "postgres": (5432, "postgres", []),
     "mysql": (3306, "mysqld", []),
+    "mariadb": (3306, "mariadbd", []),
     "mongo": (27017, "mongod", []),
+    "rabbitmq": (5672, "rabbitmq-server", []),
+    "memcached": (11211, "memcached", []),
+    "elasticsearch": (9200, "elasticsearch", []),
+    "kafka": (9092, "kafka", []),
+    "eclipse-mosquitto": (1883, "mosquitto", []),
+    "influxdb": (8086, "influxd", []),
+    "grafana": (3000, "grafana", []),
+    "prometheus": (9090, "prometheus", []),
+    "traefik": (80, "traefik", []),
+    "keycloak": (8080, "kc.sh", ["start"]),
+    "minio": (9000, "minio", ["server", "/data"]),
+    "node": (3000, "node", []),
+    "python": (8000, "python", []),
     "hello-world": (80, "/hello", []),
+}
+# what people call an image -> the image
+IMAGE_ALIASES: dict[str, str] = {
+    **{name: name for name in KNOWN_IMAGES},
+    "postgresql": "postgres",
+    "mongodb": "mongo",
+    "apache": "httpd",
+    "mosquitto": "eclipse-mosquitto",
+    "nodejs": "node",
+    "elastic": "elasticsearch",
+    "busybox": "busybox",
+    "alpine": "alpine",
+    "ubuntu": "ubuntu",
+    "debian": "debian",
+    "haproxy": "haproxy",
+    "caddy": "caddy",
+    "consul": "consul",
+    "vault": "vault",
+    "jenkins": "jenkins",
+    "wordpress": "wordpress",
+    "zookeeper": "zookeeper",
+    "nats": "nats",
 }
 WORKLOAD_KINDS = {"dockerimage": "DockerImage", "androidapk": "AndroidApk", "esp32binary": "esp32Binary"}
 CHIPS = ("esp32", "esp32s2", "esp32s3", "esp32c3", "esp32c6", "esp32h2")
@@ -53,6 +89,15 @@ class AppParams:
     chip: str = "esp32"
     device_name: str | None = None
     placeholders: list[str] = field(default_factory=list)  # values the user still has to replace
+    image_missing: bool = False  # a container workload, and nothing told us which image
+    image_guessed: bool = False  # the image is our reading of loose wording, e.g. "a kafka server"
+
+    @property
+    def file_stem(self) -> str:
+        """Default file name: the image's last path segment for containers, else the app name."""
+        if self.workload_kind == "DockerImage" and not self.image_missing:
+            return slug(self.image.rsplit("/", 1)[-1], self.name)
+        return self.name
 
 
 def slug(value: object, default: str = "") -> str:
@@ -103,6 +148,7 @@ def clean_params(data: dict, kind: str | None = None, image_hint: str | None = N
 
     has_image = bool(image) and params.workload_kind == "DockerImage"
     if not image and params.workload_kind == "DockerImage":
+        params.image_missing = True
         label = "spec.workload.dockerImage.image" if params.kind == "device" else "specs.runtime.containerImage"
         params.placeholders.append(f"{label} ({params.image})")
     params.name = slug(data.get("name"), slug(base, "my-app") if has_image else "my-app")
@@ -283,6 +329,92 @@ def strip_fences(reply: str) -> str:
     return (fenced.group(1) if fenced else reply).strip("\n") + "\n"
 
 
+_FILE_EXT = re.compile(r"\.(ya?ml|json|md|txt|apk|bin|py|sh|toml|cfg|conf|ini|xml|html|js|env)$", re.IGNORECASE)
+# registry/org/app[:tag] - at least one slash; not part of a URL or a longer path
+_REF_SLASH = re.compile(
+    r"(?<![\w./:-])((?:[a-z0-9][\w.-]*(?::\d+)?/)+[a-z0-9][\w.-]*?(?::[\w][\w.-]*?)?)(?=[\s,;)?!]|\.?$|\.\s)", re.IGNORECASE
+)
+# name:tag where the tag looks like a version
+_REF_TAG = re.compile(
+    r"(?<![\w./:-])([a-z][\w.-]*):(\d[\w.-]*?|latest|stable|alpine|slim|lts)(?=[\s,;)?!]|\.?$|\.\s)", re.IGNORECASE
+)
+_NAMED_IMAGE = re.compile(
+    r"\b(?:the|an?|using|use|with|from|run|runs|running)\s+([a-z0-9][\w./:-]*)\s+(?:docker\s+|container\s+|oci\s+)?image\b",
+    re.IGNORECASE,
+)
+_LOOSE_IMAGE = re.compile(
+    r"\bfor\s+(?:an?|the|my|our)\s+([a-z][\w-]*)\s+(?:server|database|db|container|service|broker|cache|image)\b",
+    re.IGNORECASE,
+)
+_NOT_AN_IMAGE = frozenset(
+    "port http https cpu memory tag version localhost docker container oci same this that official latest base "
+    "custom right following new web my the simple small device edge native android camera test demo sample example "
+    "production backend frontend database service app application file yaml it".split()
+)
+_TEMPLATE = re.compile(r"\b(example|template|sample|placeholder|skeleton|boilerplate|generic|dummy|any image)\b", re.IGNORECASE)
+_ANDROID = re.compile(r"\b(android|apk)\b", re.IGNORECASE)
+_ESP32 = re.compile(r"\besp[\s-]?32", re.IGNORECASE)
+
+
+def guess_image(text: str) -> tuple[str, bool] | None:
+    """The container image a request names, read without the LLM: (image, certain).
+
+    Explicit references win (user/app:1.2, name:tag, "the nginx image"), then well-known bare
+    names and their aliases ("a mongodb database"), and last loose wording ("for a kafka server"),
+    which is reported as a guess.
+    """
+    for match in _REF_SLASH.finditer(text):
+        ref = match.group(1)
+        registry = "." in ref.split("/")[0] or ":" in ref
+        named = re.match(r"\s+(?:docker\s+|container\s+)?(?:image|container)\b", text[match.end():], re.IGNORECASE)
+        if not _FILE_EXT.search(ref) and (registry or named):
+            return ref, True
+    for match in _REF_TAG.finditer(text):
+        if match.group(1).lower() not in _NOT_AN_IMAGE:
+            return match.group(0), True
+    for match in _NAMED_IMAGE.finditer(text):
+        if match.group(1).lower() not in _NOT_AN_IMAGE and not _FILE_EXT.search(match.group(1)):
+            return match.group(1), True
+
+    known = []
+    for alias, image in IMAGE_ALIASES.items():
+        # "node" is also a cluster node: "device node", "on node rpi-7"
+        guard = r"(?<!device )(?<!edge )(?<!cloud )(?<!on )" if alias == "node" else ""
+        found = re.search(rf"(?<![\w./-]){guard}{re.escape(alias)}(?![\w/-]|\.\w)(?:\s+v?(\d+(?:\.\d+)*)\b)?", text, re.IGNORECASE)
+        if found:
+            known.append((found.start(), -len(alias), image, found.group(1)))
+    if known:
+        _, _, image, version = min(known)
+        return (f"{image}:{version}" if version else image), True
+
+    loose = _LOOSE_IMAGE.search(text)
+    if loose and loose.group(1).lower() not in _NOT_AN_IMAGE:
+        return loose.group(1).lower(), False
+    return None
+
+
+def wants_template(text: str) -> bool:
+    """Whether the user asked for an example, where a placeholder image is the right answer."""
+    return bool(_TEMPLATE.search(text))
+
+
+def image_from_reply(text: str) -> str | None:
+    """The image in a short answer to "Which container image should I use?", or None."""
+    reply = text.strip().strip(".!`'\"")
+    if not reply or len(reply.split()) > 6:
+        return None
+    guess = guess_image(reply)
+    if guess:
+        return guess[0]
+    token = re.sub(r"^(?:(?:please|just|use|with|the|image|it'?s|its|is)\s+)+", "", reply, flags=re.IGNORECASE)
+    token = re.sub(r"\s+(?:image|please)$", "", token, flags=re.IGNORECASE)
+    if re.fullmatch(r"[a-z0-9][\w./:-]*", token, re.IGNORECASE) and token.lower() not in _NOT_AN_IMAGE | {
+        "yes", "no", "cancel", "none", "nothing", "skip", "idk", "whatever", "any", "stop",
+    }:
+        return token
+    return None
+
+
 _NUMBER_WORDS = re.compile(r"\b(half|quarter|one|two|three|four|six|eight)\b")
 _LITERAL_FIELDS = ("tag", "port", "owner", "device_name", "apk_url", "binary_url", "package_name")
 
@@ -331,18 +463,49 @@ def stated_params(text: str) -> dict:
     return found
 
 
-async def extract_params(text: str, kind: str | None, image_hint: str | None) -> AppParams:
-    """One JSON-mode call: the user's request -> template parameters."""
+async def llm_params(text: str) -> dict:
+    """One JSON-mode call: the user's request -> loosely-typed template parameters."""
     messages = [("system", prompts.PARAMS_SYSTEM)]
     for example, answer in prompts.PARAMS_EXAMPLES:
         messages += [("human", example), ("ai", answer)]
     messages.append(("human", text[:1000]))
-    extracted = ground(await llm.ask_json(messages), text)
+    return await llm.ask_json(messages)
+
+
+def build_params(raw: dict, text: str, kind: str | None, image_hint: str | None) -> AppParams:
+    """Everything deterministic around the LLM's answer: grounding, safety nets, defaults."""
+    extracted = ground(raw, text)
     # the model sometimes answers with a whole manifest instead: fixed-format values have a net
     data = {**extracted, **{key: value for key, value in stated_params(text).items() if not extracted.get(key)}}
     if image_hint and split_image(image_hint)[0].rsplit("/", 1)[-1].lower() not in text.lower():
         image_hint = None
-    return clean_params(data, kind, image_hint)
+
+    # what kind of workload it is must not hinge on the model noticing "ESP32" or "APK"
+    stated_workload = "esp32Binary" if _ESP32.search(text) else "AndroidApk" if _ANDROID.search(text) else None
+    if stated_workload and not data.get("workload_kind"):
+        data["workload_kind"] = stated_workload
+    if stated_workload:
+        kind = "device"
+
+    guess = guess_image(text)
+    guessed = False
+    explicit = guess and guess[1] and ("/" in guess[0] or ":" in guess[0])
+    if guess and (explicit or not (data.get("image") or image_hint)):
+        # an explicit reference in the text beats the model's reading of it
+        data["image"], image_hint = guess[0], None
+        if ":" in guess[0].rsplit("/", 1)[-1]:
+            data["tag"] = None
+        guessed = not guess[1]
+
+    params = clean_params(data, kind, image_hint)
+    params.image_guessed = guessed and not params.image_missing
+    if params.image_guessed:
+        params.placeholders.append(f"the container image ({params.image}, my reading of your request)")
+    return params
+
+
+async def extract_params(text: str, kind: str | None, image_hint: str | None) -> AppParams:
+    return build_params(await llm_params(text), text, kind, image_hint)
 
 
 async def _rewrite(system: str, user: str) -> str:

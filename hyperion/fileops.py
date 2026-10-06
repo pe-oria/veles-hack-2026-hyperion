@@ -4,6 +4,7 @@ import difflib
 import logging
 import re
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 
 import yaml
 
@@ -17,6 +18,14 @@ from hyperion.session import Session
 log = logging.getLogger("hyperion")
 
 Event = str | dict
+
+
+@dataclass(frozen=True)
+class PendingCreate:
+    """A create request that is waiting for the user to name the container image."""
+
+    text: str
+    route: Route
 MAX_REPAIRS = 2
 MAX_SHOWN_CHARS = 3000
 _FIX = re.compile(r"\b(fix|repair|correct|make (it|this|that|the file) valid|resolve)\b", re.IGNORECASE)
@@ -148,13 +157,20 @@ async def create_file(route: Route, text: str, session: Session) -> AsyncIterato
             yield event
         return
 
+    if raw:
+        actions.clean_path(raw)  # a path we will refuse must be refused before any question
     params = await yamlgen.extract_params(text, route.app_kind, route.image)
+    if params.image_missing and not yamlgen.wants_template(text):
+        # never invent an image: a descriptor for the wrong container is worse than a question
+        session.pending_create = PendingCreate(text, route)
+        yield prompts.ASK_IMAGE
+        return
     if not raw:
-        path = f"{params.name}.yaml"
+        path = f"{params.file_stem}.yaml"
     elif actions.has_extension(raw):
         path = actions.clean_path(raw)
     elif is_folder_reference(raw, text, session):
-        path = actions.clean_path(f"{raw}/{params.name}.yaml")
+        path = actions.clean_path(f"{raw}/{params.file_stem}.yaml")
     else:
         path = actions.clean_path(f"{raw}.yaml")
 
@@ -163,7 +179,7 @@ async def create_file(route: Route, text: str, session: Session) -> AsyncIterato
     subject = f"{params.image}:{params.tag}" if params.workload_kind == "DockerImage" else f"{params.name}"
     note = ""
     if params.placeholders:
-        note = "\n\nI used placeholder values you need to replace: " + ", ".join(params.placeholders) + "."
+        note = "\n\nPlease check these values, I had to assume them: " + ", ".join(params.placeholders) + "."
 
     if await exists(path):
         question = f"{path} already exists. Overwrite it with a new {what} for {subject}?"
@@ -179,6 +195,13 @@ async def create_file(route: Route, text: str, session: Session) -> AsyncIterato
     if note:
         yield note
     async for event in validate_and_repair(path, content):
+        yield event
+
+
+async def resume_create(waiting: PendingCreate, image: str, session: Session) -> AsyncIterator[Event]:
+    """Finish a create request now that the user has named the image."""
+    route = waiting.route.model_copy(update={"image": image})
+    async for event in handle(route, f"{waiting.text} (container image: {image})", session):
         yield event
 
 
