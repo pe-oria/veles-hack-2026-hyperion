@@ -47,7 +47,10 @@ event `data: <json>\n\n` — `{"response": "<incremental text>"}` or an IDE acti
    LLM extracts, so they are valid by construction. Edits are whole-file rewrites by the LLM; after
    each write the agent waits for the IDE to save the file, runs `validate_file`, and lets the LLM
    repair reported errors (at most twice). Paths are sanitised and must come from the user's words.
-5. **Memory** – the last turns of each `user_id` are kept and given to the router and the answer.
+5. **Human in the loop** – deleting a file or folder, or overwriting an existing file, is stored
+   as a pending action and only runs after an explicit "yes". The reply is judged by rules, not by
+   the LLM; anything that is not a clear yes cancels the action.
+6. **Memory** – the last turns of each `user_id` are kept and given to the router and the answer.
 
 `scripts/ide_sim.py "<message>" ...` plays the IDE from a terminal: it prints the reply and applies
 the agent's actions to a local `ide-backend`, which is what makes validation testable end to end.
@@ -61,7 +64,7 @@ models; `scripts/fetch_docs.py` refreshes the tutorial pages in `knowledge/`.
 - [x] M1 – sessions + router + guardrail
 - [x] M2 – RAG over `knowledge/`
 - [x] M3 – file actions
-- [ ] M4 – human-in-the-loop confirmation
+- [x] M4 – human-in-the-loop confirmation
 - [ ] M5 – polish
 
 ## License

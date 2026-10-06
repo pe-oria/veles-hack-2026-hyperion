@@ -109,13 +109,6 @@ async def test_create_file_in_a_named_folder_and_with_an_explicit_path(workspace
     assert done[0]["path"] == "web/site.yaml"
 
 
-async def test_create_file_never_overwrites(workspace):
-    workspace.files["nginx.yaml"] = "old"
-    reply, done = await run(workspace, Session(), "nginx yaml please", intent="create_file", image="nginx")
-    assert done == [] and "already exists" in reply
-    assert workspace.files["nginx.yaml"] == "old"
-
-
 async def test_same_name_in_another_folder_does_not_block_creation(workspace):
     workspace.files["demo/nginx.yaml"] = "other"
     _, done = await run(workspace, Session(), "nginx yaml please", intent="create_file", image="nginx")
@@ -194,13 +187,45 @@ async def test_fix_request_is_driven_by_the_validation_report(workspace, fake_ll
     assert done == [] and "nothing to fix" in reply
 
 
-async def test_delete_resolves_the_real_path_and_forgets_the_file(workspace):
+async def confirm_pending(workspace: FakeIde, session: Session) -> tuple[str, list[dict]]:
+    """Answer "yes" to the pending question."""
+    pending, session.pending_action = session.pending_action, None
+    reply, done = "", []
+    async for event in fileops.execute_pending(pending, session):
+        if isinstance(event, dict):
+            workspace.apply(event)
+            done.append(event)
+        else:
+            reply += event
+    return reply, done
+
+
+async def test_delete_asks_first_and_only_acts_once_confirmed(workspace):
     workspace.files["demo/nginx.yaml"] = NGINX
     session = Session()
     session.remember_file("demo/nginx.yaml")
+
     reply, done = await run(workspace, session, "Delete it", intent="delete_file")
-    assert done == [actions.delete_file("demo/nginx.yaml")] and "Deleted `demo/nginx.yaml`" in reply
-    assert session.last_file is None and session.files == []
+    assert done == [] and reply == "Delete `demo/nginx.yaml`? (yes/no)"
+    assert "demo/nginx.yaml" in workspace.files and session.last_file == "demo/nginx.yaml"
+    assert session.pending_action.action == actions.delete_file("demo/nginx.yaml")
+
+    reply, done = await confirm_pending(workspace, session)
+    assert done == [actions.delete_file("demo/nginx.yaml")] and reply == "Deleted `demo/nginx.yaml`."
+    assert workspace.files == {} and session.last_file is None and session.files == []
+
+
+async def test_overwrite_asks_first_then_replaces_with_edit_file_and_validates(workspace):
+    workspace.files["nginx.yaml"] = "old content"
+    session = Session()
+    reply, done = await run(workspace, session, "nginx yaml please", intent="create_file", image="nginx")
+    assert done == [] and reply.startswith("`nginx.yaml` already exists. Overwrite it") and reply.endswith("(yes/no)")
+    assert workspace.files["nginx.yaml"] == "old content"
+
+    reply, done = await confirm_pending(workspace, session)
+    assert done == [actions.edit_file("nginx.yaml", NGINX)]  # create_file would fail on an existing file
+    assert reply.startswith("Overwrote `nginx.yaml`") and reply.endswith("Validation passed.")
+    assert workspace.files["nginx.yaml"] == NGINX and session.last_file == "nginx.yaml"
 
 
 async def test_missing_ambiguous_and_unnamed_files_become_messages_not_actions(workspace):
@@ -211,8 +236,10 @@ async def test_missing_ambiguous_and_unnamed_files_become_messages_not_actions(w
     reply, done = await run(workspace, Session(), "delete app.yaml", intent="delete_file", path="app.yaml")
     assert done == [] and "Several files are named" in reply
 
-    reply, done = await run(workspace, Session(), "Delete it", intent="delete_file")
+    session = Session()
+    reply, done = await run(workspace, session, "Delete it", intent="delete_file")
     assert done == [] and "Which file do you mean" in reply
+    assert session.pending_action is None  # nothing to confirm when there is nothing to delete
 
 
 @pytest.mark.parametrize("path", ["../../etc/passwd.yaml", "/etc/hosts", "~/x.yaml", "C:\\\\x.yaml", "a/../../b.yaml"])
@@ -242,7 +269,11 @@ async def test_folders(workspace):
     session.remember_file("demo/nginx.yaml")
 
     reply, done = await run(workspace, session, "delete that folder", intent="delete_folder")
-    assert done == [actions.delete_folder("demo")]
+    assert done == [] and session.folders == ["demo"]
+    assert reply == "Delete the folder `demo` and everything in it? It contains `demo/nginx.yaml`. (yes/no)"
+
+    reply, done = await confirm_pending(workspace, session)
+    assert done == [actions.delete_folder("demo")] and reply == "Deleted the folder `demo`."
     assert session.folders == [] and session.files == []
 
     reply, done = await run(workspace, Session(), "delete that folder", intent="delete_folder")

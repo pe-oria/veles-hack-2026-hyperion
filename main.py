@@ -13,7 +13,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger("hyperion")
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
-from hyperion import fileops, guardrails, llm, prompts, rag, router  # noqa: E402
+from hyperion import confirm, fileops, guardrails, llm, prompts, rag, router  # noqa: E402
 from hyperion.session import Session, get_session  # noqa: E402
 
 
@@ -108,6 +108,27 @@ async def retrieve_for(text: str, session: Session) -> tuple[float | None, rag.H
 
 async def run_turn(text: str, session: Session) -> AsyncIterator[fileops.Event]:
     """Yield the text increments (str) and IDE actions (dict) of one reply. Python owns the control flow."""
+    # 1. a destructive action is waiting: this message is the answer to "(yes/no)"
+    declined = False
+    if session.pending_action:
+        pending, session.pending_action = session.pending_action, None
+        decision = confirm.classify(text)
+        log.info("intent=confirmation decision=%s pending=%s", decision, pending.action["action"])
+        if decision == "yes":
+            async for event in fileops.execute_pending(pending, session):
+                yield event
+            return
+        if decision == "no":
+            yield prompts.CANCELLED
+            return
+        yield prompts.NOT_CONFIRMED.format(question=pending.question)
+        declined = True
+    elif confirm.is_bare_answer(text):
+        # a bare "yes"/"no" with nothing to confirm: the model would just repeat its last answer
+        log.info("intent=confirmation decision=%s pending=None", confirm.classify(text))
+        yield prompts.NOTHING_PENDING
+        return
+
     route = await router.route(text, session)
     similarity, hits = None, []
     if route.intent == "off_topic" or (route.intent == "question" and not route.about_conversation):
@@ -120,6 +141,8 @@ async def run_turn(text: str, session: Session) -> AsyncIterator[fileops.Event]:
         route.model_dump(exclude={"intent"}, exclude_defaults=True),
     )
 
+    if declined and route.intent in ("off_topic", "smalltalk"):
+        return  # "maybe later": saying we left things alone is the whole answer
     if route.intent == "off_topic":
         yield prompts.REFUSAL
     elif route.intent == "smalltalk":

@@ -98,3 +98,25 @@ def test_ground_keeps_what_the_user_stated():
     # "7" must be stated as a number of its own, not found inside another one
     assert yamlgen.ground({"memory": "7Gi"}, "nginx on port 8070")["memory"] is None
     assert yamlgen.ground({"image": "postgres"}, "a database service")["image"] is None
+
+
+def test_stated_params_reads_fixed_format_values_from_the_text():
+    stated = yamlgen.stated_params
+    assert stated("nginx:1.27 Docker image with 4Gi of memory") == {"memory": "4Gi"}
+    assert stated("2 cpus, 4Gi memory and 20Gi storage on port 8080") == {
+        "cpu": "2", "memory": "4Gi", "storage": "20Gi", "port": "8080"}
+    assert stated("postgres 16 with 2GB RAM listening on 5433, cpu 750m") == {
+        "memory": "2GB", "port": "5433", "cpu": "750m"}
+    assert stated("set the memory to 512 MB") == {"memory": "512 MB"}
+    assert stated("Create a deployment YAML for a service using the nginx Docker image") == {}
+    assert stated("a redis:7 cache") == {}
+
+
+async def test_extraction_survives_a_model_that_writes_a_manifest_instead(monkeypatch):
+    async def manifest_instead_of_params(messages):
+        return {"apiVersion": "apps/v1", "kind": "Deployment", "spec": {"replicas": 1}}
+
+    monkeypatch.setattr(yamlgen.llm, "ask_json", manifest_instead_of_params)
+    text = "Create a deployment YAML for a service using the nginx:1.27 Docker image with 4Gi of memory on port 8080"
+    params = await yamlgen.extract_params(text, "native", "nginx:1.27")
+    assert (params.kind, params.image, params.tag, params.memory, params.port) == ("native", "nginx", "1.27", "4Gi", 8080)

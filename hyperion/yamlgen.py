@@ -310,15 +310,39 @@ def ground(data: dict, text: str) -> dict:
     return kept
 
 
+_SIZE_TEXT = r"(\d+(?:\.\d+)?\s*(?:Gi|Mi|Ti|GB|MB|TB|G|M)B?)"
+_STATED = {
+    "memory": [rf"{_SIZE_TEXT}\s*(?:of\s+)?(?:memory|ram)\b", rf"\b(?:memory|ram)\b\D{{0,12}}{_SIZE_TEXT}"],
+    "storage": [rf"{_SIZE_TEXT}\s*(?:of\s+)?(?:storage|disk)\b", rf"\b(?:storage|disk)\b\D{{0,12}}{_SIZE_TEXT}"],
+    "cpu": [r"(\d+(?:\.\d+)?)\s*(?:v?cpus?|cores?)\b", r"\b(\d+m)\b", r"\bcpu\b\D{0,12}(\d+(?:\.\d+)?m?)\b"],
+    "port": [r"\bport\s+(\d{2,5})\b", r"\b(?:listening|listens|exposed?)\s+on\s+(\d{2,5})\b"],
+}
+
+
+def stated_params(text: str) -> dict:
+    """Resource values and ports read straight from the user's words, no LLM involved."""
+    found = {}
+    for key, patterns in _STATED.items():
+        for pattern in patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                found[key] = match.group(1)
+                break
+    return found
+
+
 async def extract_params(text: str, kind: str | None, image_hint: str | None) -> AppParams:
     """One JSON-mode call: the user's request -> template parameters."""
     messages = [("system", prompts.PARAMS_SYSTEM)]
     for example, answer in prompts.PARAMS_EXAMPLES:
         messages += [("human", example), ("ai", answer)]
     messages.append(("human", text[:1000]))
+    extracted = ground(await llm.ask_json(messages), text)
+    # the model sometimes answers with a whole manifest instead: fixed-format values have a net
+    data = {**extracted, **{key: value for key, value in stated_params(text).items() if not extracted.get(key)}}
     if image_hint and split_image(image_hint)[0].rsplit("/", 1)[-1].lower() not in text.lower():
         image_hint = None
-    return clean_params(ground(await llm.ask_json(messages), text), kind, image_hint)
+    return clean_params(data, kind, image_hint)
 
 
 async def _rewrite(system: str, user: str) -> str:

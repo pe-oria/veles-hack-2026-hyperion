@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator
 import yaml
 
 from hyperion import actions, ide, llm, prompts, yamlgen
+from hyperion.confirm import Pending
 from hyperion.actions import PathError
 from hyperion.ide import IdeError
 from hyperion.router import Route
@@ -132,9 +133,11 @@ async def delete_folder(route: Route, text: str, session: Session) -> AsyncItera
     if not named and not session.last_folder:
         raise PathError("Which folder do you mean? Give me its name or path.")
     path = actions.clean_path(named or session.last_folder)
-    yield actions.delete_folder(path)
-    session.forget_folder(path)
-    yield f"Deleted the folder `{path}`."
+    inside = [file for file in session.files if file.startswith(f"{path}/")]
+    contents = f" It contains {', '.join(f'`{file}`' for file in inside)}." if inside else ""
+    question = f"Delete the folder `{path}` and everything in it?{contents}"
+    session.pending_action = Pending(actions.delete_folder(path), question, f"Deleted the folder `{path}`.")
+    yield f"{question} {prompts.CONFIRM_HINT}"
 
 
 async def create_file(route: Route, text: str, session: Session) -> AsyncIterator[Event]:
@@ -154,27 +157,37 @@ async def create_file(route: Route, text: str, session: Session) -> AsyncIterato
     else:
         path = actions.clean_path(f"{raw}.yaml")
 
-    if await exists(path):
-        yield f"`{path}` already exists. Ask me to edit it, or give me another file name."
-        return
-
     content = yamlgen.render(params)
     what = "device application manifest" if params.kind == "device" else "native application profile"
     subject = f"`{params.image}:{params.tag}`" if params.workload_kind == "DockerImage" else f"`{params.name}`"
+    note = ""
+    if params.placeholders:
+        note = "\n\nI used placeholder values you need to replace: " + ", ".join(params.placeholders) + "."
+
+    if await exists(path):
+        question = f"`{path}` already exists. Overwrite it with a new {what} for {subject}?"
+        done = f"Overwrote `{path}` with a new {what} for {subject}.{note}"
+        # create_file fails on an existing file: replacing it is an edit_file
+        session.pending_action = Pending(actions.edit_file(path, content), question, done, validate=True)
+        yield f"{question} {prompts.CONFIRM_HINT}"
+        return
+
     yield f"Creating `{path}` - a {what} for {subject}."
     yield actions.create_file(path, content)
     session.remember_file(path)
-    if params.placeholders:
-        yield "\n\nI used placeholder values you need to replace: " + ", ".join(params.placeholders) + "."
+    if note:
+        yield note
     async for event in validate_and_repair(path, content):
         yield event
 
 
 async def create_plain_file(path: str, text: str, session: Session) -> AsyncIterator[Event]:
-    if await exists(path):
-        yield f"`{path}` already exists. Ask me to edit it, or give me another file name."
-        return
     content = await yamlgen.write_plain(path, text)
+    if await exists(path):
+        question = f"`{path}` already exists. Overwrite it with new content?"
+        session.pending_action = Pending(actions.edit_file(path, content), question, f"Overwrote `{path}`.")
+        yield f"{question} {prompts.CONFIRM_HINT}"
+        return
     yield f"Creating `{path}`."
     yield actions.create_file(path, content)
     session.remember_file(path)
@@ -231,9 +244,25 @@ async def delete_file(route: Route, text: str, session: Session) -> AsyncIterato
     except IdeError as exc:
         if exc.kind != "unreachable":
             raise
-    yield actions.delete_file(path)
-    session.forget_file(path)
-    yield f"Deleted `{path}`."
+    question = f"Delete `{path}`?"
+    session.pending_action = Pending(actions.delete_file(path), question, f"Deleted `{path}`.")
+    yield f"{question} {prompts.CONFIRM_HINT}"
+
+
+async def execute_pending(pending: Pending, session: Session) -> AsyncIterator[Event]:
+    """Carry out an action the user has just confirmed."""
+    action, path = pending.action["action"], pending.action["path"]
+    yield pending.action
+    if action == "delete_file":
+        session.forget_file(path)
+    elif action == "delete_folder":
+        session.forget_folder(path)
+    else:
+        session.remember_file(path)
+    yield pending.done
+    if pending.validate:
+        async for event in validate_and_repair(path, pending.action["content"]):
+            yield event
 
 
 async def validate_file(route: Route, text: str, session: Session) -> AsyncIterator[Event]:

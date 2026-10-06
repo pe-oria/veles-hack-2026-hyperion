@@ -119,13 +119,23 @@ SMALLTALK = (
     "for a service using the nginx Docker image\"."
 )
 
+CONFIRM_HINT = "(yes/no)"
+
+CANCELLED = "Okay, cancelled - nothing was changed."
+
+NOTHING_PENDING = "There is nothing waiting for your confirmation. What would you like me to do?"
+
+# the user answered a confirmation with something else: we drop the action and say so
+NOT_CONFIRMED = "I did not get a yes, so I left things as they were: {question}\n\n"
+
 LLM_ERROR = "Sorry, I could not reach the language model. Please try again."
 
 
 # --- file actions ---------------------------------------------------------------------------
 
 PARAMS_SYSTEM = """Extract the parameters of the application the user wants to describe. Reply with \
-ONE JSON object and nothing else. Use null for anything the user did not state - never guess.
+ONE flat JSON object with exactly the keys below and nothing else. Use null for anything the user \
+did not state - never guess. Do NOT write the deployment, manifest or YAML itself.
 
 {"name": null, "description": null, "owner": null, "lifecycle_phase": null, "image": null, \
 "tag": null, "port": null, "cpu": null, "memory": null, "storage": null, "workload_kind": null, \

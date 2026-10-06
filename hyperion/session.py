@@ -1,6 +1,10 @@
 """In-memory per-user session store (keyed by the IDE's user_id)."""
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from hyperion.confirm import Pending
 
 MAX_TURNS = 6  # user+assistant pairs kept; the model only has an 8k context
 MAX_CHARS = 1200  # per stored message
@@ -9,7 +13,7 @@ MAX_CHARS = 1200  # per stored message
 @dataclass
 class Session:
     history: list[tuple[str, str]] = field(default_factory=list)  # (role, text)
-    pending_action: dict | None = None
+    pending_action: "Pending | None" = None  # a destructive action awaiting the user's "yes"
     last_file: str | None = None
     files: list[str] = field(default_factory=list)  # there is no "list files" endpoint: we keep track
     last_folder: str | None = None
