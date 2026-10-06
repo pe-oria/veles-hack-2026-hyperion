@@ -13,13 +13,15 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger("hyperion")
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
-from hyperion import confirm, fileops, guardrails, llm, prompts, rag, router  # noqa: E402
+from hyperion import confirm, fileops, guardrails, ide, llm, prompts, rag, router  # noqa: E402
 from hyperion.session import Session, get_session  # noqa: E402
 
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    backend = await ide.discover()
+    log.info("IDE backend: %s", backend or "not reachable yet - will look again when a file is needed")
     try:
         index = await rag.get_index()
         log.info("knowledge index ready: %d chunks", len(index.chunks))

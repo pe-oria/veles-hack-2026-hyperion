@@ -8,9 +8,11 @@ requests into IDE actions: it writes application descriptors, validates them, fi
 before it deletes anything.
 
 ```bash
-docker run --rm -p 8000:8000 -e API_KEY=<legion1 key> \
-  --add-host host.docker.internal:host-gateway starchhh/hyperion:latest
+docker run --rm -p 8000:8000 -e API_KEY=<legion1 key> starchhh/hyperion:latest
 ```
+
+The image is multi-arch (`linux/amd64` and `linux/arm64`), so the same tag runs on x86 servers and
+Apple Silicon.
 
 ## What it does
 
@@ -167,6 +169,13 @@ docker buildx build --platform linux/amd64,linux/arm64 -t <dockerhub-user>/hyper
 The API key is never baked into the image; it is injected at runtime (`-e API_KEY=...` or
 `env_file`). Without it the service still starts and `/health` answers, and every chat replies with
 a configuration error naming `API_KEY`; a key the server rejects gets its own message.
+
+**Reaching the IDE backend from the container.** `host.docker.internal` exists on Docker Desktop
+(macOS, Windows) but not on Linux unless the container is started with
+`--add-host host.docker.internal:host-gateway`. Hyperion therefore probes several addresses at
+startup - `IDE_BACKEND_URL`, `host.docker.internal`, the container's default gateway and
+`localhost` - and uses the first one where the backend answers, so a plain `docker run` works on
+Linux too. If the backend lives somewhere else, set `IDE_BACKEND_URL`.
 
 Configuration (environment variables): `API_KEY` (required for LLM calls), `IDE_BACKEND_URL`
 (default `http://localhost:3001/api`, `http://host.docker.internal:3001/api` in the image),

@@ -268,7 +268,9 @@ async def execute_pending(pending: Pending, session: Session) -> AsyncIterator[E
 
 
 async def validate_file(route: Route, text: str, session: Session) -> AsyncIterator[Event]:
-    report = await ide.validate(target_file(route, text, session))
+    path = target_file(route, text, session)
+    await ide.read(path)  # finds the backend if needed and gives the clearer "not found" message
+    report = await ide.validate(path)
     if report.get("path"):
         session.remember_file(report["path"])
     yield format_report(report)
