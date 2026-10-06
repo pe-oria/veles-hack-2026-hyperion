@@ -10,8 +10,10 @@ to the HyperAI IDE as Server-Sent Events.
 ```bash
 cp .env.example .env        # then paste the team API_KEY into .env (never commit it)
 
+uv run python -m hyperion.rag   # embed knowledge/ into .cache/index.npz (once, and after editing knowledge/)
+
 uv run main.py              # local, agent on :8000
-docker compose up --build   # or in Docker (the image is the deliverable)
+docker compose up --build   # or in Docker (the image is the deliverable; it ships the index)
 
 curl localhost:8000/health
 curl -N -X POST localhost:8000/chat -H 'Content-Type: application/json' \
@@ -33,11 +35,24 @@ Request: `{"user_id": "<uuid>", "text": "<user message>"}`. Response: `text/even
 event `data: <json>\n\n` — `{"response": "<incremental text>"}` or an IDE action — ending with
 `data: [DONE]`.
 
+## How a message is handled
+
+1. **Router** – one JSON-mode call to `llama3.1` classifies the message (question, file action,
+   smalltalk, off-topic) and extracts slots. Python owns the control flow from there.
+2. **Guardrail** – off-topic messages get a fixed refusal. The router's verdict is cross-checked
+   against the embedding similarity of the message to the knowledge base.
+3. **RAG** – questions retrieve the top chunks of `knowledge/` (`nomic-embed-text`, cosine) and are
+   answered only from those excerpts; the source documents are appended to the answer.
+4. **Memory** – the last turns of each `user_id` are kept and given to the router and the answer.
+
+`scripts/eval_router.py` and `scripts/eval_rag.py` check the router and retrieval against the live
+models; `scripts/fetch_docs.py` refreshes the tutorial pages in `knowledge/`.
+
 ## Status
 
 - [x] M0 – starter running locally and as a Docker image (amd64 + arm64)
 - [x] M1 – sessions + router + guardrail
-- [ ] M2 – RAG over `knowledge/`
+- [x] M2 – RAG over `knowledge/`
 - [ ] M3 – file actions
 - [ ] M4 – human-in-the-loop confirmation
 - [ ] M5 – polish

@@ -8,6 +8,9 @@ RUN uv sync --no-dev --frozen --no-install-project
 
 COPY main.py helpers.py ./
 COPY hyperion ./hyperion
+COPY knowledge ./knowledge
+# prebuilt embedding index (uv run python -m hyperion.rag); rebuilt at startup if stale
+COPY .cache ./.cache
 
 ENV IDE_BACKEND_URL=http://host.docker.internal:3001/api
 

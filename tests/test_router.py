@@ -33,7 +33,12 @@ def test_router_prompt_contains_history_and_latest_message():
 
 def test_router_examples_are_valid_routes():
     for _, _, answer in prompts.ROUTER_EXAMPLES:
-        Route.model_validate_json(answer)
+        Route(**answer)
+
+
+def test_parse_route_keeps_conversation_flag_when_a_slot_is_bad():
+    route = parse_route({"intent": "question", "about_conversation": True, "app_kind": "cloud"})
+    assert route.about_conversation is True
 
 
 def test_session_keeps_only_recent_turns():
@@ -49,3 +54,23 @@ def test_guardrail_overrides_off_topic_for_domain_terms():
     assert guardrails.apply(off, "What is a DeviceNode?").intent == "question"
     assert guardrails.apply(off, "What is the weather today?").intent == "off_topic"
     assert guardrails.apply(Route(intent="smalltalk"), "hi hyperion").intent == "smalltalk"
+
+
+def test_guardrail_similarity_thresholds():
+    off, question = Route(intent="off_topic"), Route(intent="question")
+    assert guardrails.apply(off, "How are edge gadgets registered?", similarity=0.75).intent == "question"
+    assert guardrails.apply(off, "Tell me a joke", similarity=0.49).intent == "off_topic"
+    assert guardrails.apply(question, "How do I cook lasagna?", similarity=0.5).intent == "off_topic"
+    # a far-away question is allowed when it is about the conversation, or names the domain
+    chat = Route(intent="question", about_conversation=True)
+    assert guardrails.apply(chat, "What did I just ask?", similarity=0.5).intent == "question"
+    assert guardrails.apply(question, "Is HyperAI free?", similarity=0.5).intent == "question"
+    # retrieval unavailable: trust the router
+    assert guardrails.apply(question, "How do I cook lasagna?", similarity=None).intent == "question"
+
+
+def test_guardrail_follow_up_score_keeps_questions_but_never_rescues_off_topic():
+    question, off = Route(intent="question"), Route(intent="off_topic")
+    assert guardrails.apply(question, "why?", similarity=0.4, follow_up_similarity=0.7).intent == "question"
+    assert guardrails.apply(question, "why?", similarity=0.4, follow_up_similarity=0.5).intent == "off_topic"
+    assert guardrails.apply(off, "Tell me a joke", similarity=0.49, follow_up_similarity=0.8).intent == "off_topic"

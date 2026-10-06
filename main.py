@@ -2,6 +2,7 @@ import json
 import logging
 import time
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,11 +11,24 @@ from pydantic import BaseModel
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("hyperion")
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
-from hyperion import guardrails, llm, prompts, router  # noqa: E402
+from hyperion import guardrails, llm, prompts, rag, router  # noqa: E402
 from hyperion.session import Session, get_session  # noqa: E402
 
-app = FastAPI(title="Hyperion Agent")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    try:
+        index = await rag.get_index()
+        log.info("knowledge index ready: %d chunks", len(index.chunks))
+    except Exception:
+        log.exception("knowledge index not available yet - will retry on the first question")
+    yield
+
+
+app = FastAPI(title="Hyperion Agent", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -33,25 +47,88 @@ def sse(payload: dict) -> str:
     return f"data: {json.dumps(payload)}\n\n"
 
 
-async def answer_question(text: str, session: Session) -> AsyncIterator[str]:
-    """Stream an answer that sees the session history (RAG context is added in M2)."""
-    messages = [("system", prompts.ANSWER_SYSTEM), *session.history, ("user", text)]
-    async for chunk in llm.chat_llm.astream(messages):
-        if chunk.text:
-            yield chunk.text
+async def answer_question(text: str, session: Session, hits: rag.Hits) -> AsyncIterator[str]:
+    """Stream an answer grounded in the retrieved excerpts, then cite the source documents."""
+    context = rag.format_context(hits)
+    question = (
+        prompts.ANSWER_USER.format(context=context, question=text)
+        if context
+        else prompts.ANSWER_USER_NO_CONTEXT.format(question=text)
+    )
+    messages = [("system", prompts.ANSWER_SYSTEM), *session.history, ("user", question)]
+    answer = ""
+    async for piece in without_sources_line(llm.chat_llm.astream(messages)):
+        answer += piece
+        yield piece
+    titles = rag.source_titles(hits) if context else []
+    if titles and prompts.DONT_KNOW_MARK not in answer:
+        yield prompts.SOURCES.format(titles="; ".join(titles))
+
+
+async def answer_from_conversation(text: str, session: Session) -> AsyncIterator[str]:
+    """Stream an answer about the chat itself: no excerpts (they distract the model), no sources."""
+    messages = [("system", prompts.ANSWER_CONVERSATION_SYSTEM), *session.history, ("user", text)]
+    async for piece in without_sources_line(llm.chat_llm.astream(messages)):
+        yield piece
+
+
+async def without_sources_line(chunks) -> AsyncIterator[str]:
+    """Pass the model's text through, dropping a "Sources:" line if it writes its own.
+
+    Holds back the last few characters so the marker is caught even when split across chunks.
+    """
+    mark = prompts.SOURCES_MARK
+    held = ""
+    async for chunk in chunks:
+        if not chunk.text:
+            continue
+        held += chunk.text
+        cut = held.find(mark)
+        if cut != -1:
+            if held[:cut].rstrip():
+                yield held[:cut].rstrip()
+            return
+        safe = len(held) - (len(mark) - 1)
+        if safe > 0:
+            yield held[:safe]
+            held = held[safe:]
+    if held.rstrip():
+        yield held.rstrip()
+
+
+async def retrieve_for(text: str, session: Session) -> tuple[float | None, rag.Hits]:
+    """Return (similarity of the raw message, hits for the history-aware query)."""
+    try:
+        raw, contextual = await rag.search([text, rag.contextual_query(text, session.last_user_text())])
+    except Exception:
+        log.exception("retrieval failed - answering without documentation")
+        return None, []
+    return (raw[0][1] if raw else None), contextual
 
 
 async def run_turn(text: str, session: Session) -> AsyncIterator[str]:
     """Yield the text increments of one reply. Python owns the control flow."""
-    route = guardrails.apply(await router.route(text, session), text)
-    log.info("intent=%s slots=%s", route.intent, route.model_dump(exclude={"intent"}, exclude_none=True))
+    route = await router.route(text, session)
+    similarity, hits = None, []
+    if route.intent == "off_topic" or (route.intent == "question" and not route.about_conversation):
+        similarity, hits = await retrieve_for(text, session)
+        route = guardrails.apply(route, text, similarity, hits[0][1] if hits else None)
+    log.info(
+        "intent=%s similarity=%s slots=%s",
+        route.intent,
+        None if similarity is None else round(similarity, 3),
+        route.model_dump(exclude={"intent"}, exclude_defaults=True),
+    )
 
     if route.intent == "off_topic":
         yield prompts.REFUSAL
     elif route.intent == "smalltalk":
         yield prompts.SMALLTALK
+    elif route.intent == "question" and route.about_conversation:
+        async for piece in answer_from_conversation(text, session):
+            yield piece
     elif route.intent == "question":
-        async for piece in answer_question(text, session):
+        async for piece in answer_question(text, session, hits):
             yield piece
     else:
         yield prompts.NOT_IMPLEMENTED.format(intent=route.intent)
@@ -70,7 +147,8 @@ async def generate_reply(request: ChatRequest) -> AsyncIterator[str]:
         reply.append(prompts.LLM_ERROR)
         yield sse({"response": prompts.LLM_ERROR})
     else:
-        session.add_turn(request.text, "".join(reply))
+        # the model imitates a "Sources:" line it sees in its own earlier answers
+        session.add_turn(request.text, "".join(reply).split(prompts.SOURCES_MARK)[0].rstrip())
     log.info("turn done user=%s latency=%.2fs", request.user_id, time.perf_counter() - started)
     yield "data: [DONE]\n\n"
 

@@ -4,7 +4,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 import main
-from hyperion import llm, prompts, router, session
+from hyperion import llm, prompts, rag, router, session
+from hyperion.rag import Chunk
 from hyperion.router import Route
 
 client = TestClient(main.app)
@@ -18,18 +19,45 @@ class FakeChunk:
 class FakeLLM:
     """Records the messages it was asked to answer."""
 
-    def __init__(self) -> None:
+    def __init__(self, pieces=("Hello ", "", "world")) -> None:
         self.calls: list[list] = []
+        self.pieces = pieces
 
     async def astream(self, messages):
         self.calls.append(list(messages))
-        for text in ("Hello ", "", "world"):
+        for text in self.pieces:
             yield FakeChunk(text)
+
+
+def text_of(pieces: list[str]) -> str:
+    return "".join(pieces)
+
+
+DOC = Chunk(title="Intro Doc", section="About", text="HyperAI is an EU project.")
 
 
 @pytest.fixture(autouse=True)
 def fresh_sessions():
     session._sessions.clear()
+
+
+@pytest.fixture(autouse=True)
+def fake_search(monkeypatch) -> dict:
+    """Stand-in for the embedding index; tests set state["score"] / state["fail"]."""
+    state = {"score": 0.8, "fail": False, "queries": []}
+
+    async def search(queries, k=rag.TOP_K):
+        if state["fail"]:
+            raise RuntimeError("embedding server down")
+        state["queries"].append(list(queries))
+        return [[(DOC, state["score"])] for _ in queries]
+
+    async def get_index():
+        return rag.Index([DOC], None)
+
+    monkeypatch.setattr(rag, "search", search)
+    monkeypatch.setattr(rag, "get_index", get_index)
+    return state
 
 
 @pytest.fixture
@@ -62,15 +90,74 @@ def test_health():
     assert response.json() == {"status": "ok"}
 
 
-def test_question_streams_increments(monkeypatch, fake_llm):
+def test_question_is_grounded_and_cites_sources(monkeypatch, fake_llm):
     set_route(monkeypatch, intent="question")
-    assert post("What is HyperAI?") == ["Hello ", "world"]
+    assert text_of(post("What is HyperAI?")) == "Hello world\n\nSources: Intro Doc"
+    prompt = fake_llm.calls[0][-1][1]
+    assert "### Intro Doc - About\nHyperAI is an EU project." in prompt
+    assert prompt.endswith("Question: What is HyperAI?")
 
 
-def test_off_topic_is_refused_without_calling_the_llm(monkeypatch, fake_llm):
+def test_model_written_sources_line_is_dropped(monkeypatch):
+    fake = FakeLLM(pieces=("They manage devices.\n\nSour", "ces: Made Up Doc, Another"))
+    monkeypatch.setattr(llm, "chat_llm", fake)
+    set_route(monkeypatch, intent="question")
+    assert text_of(post("What are Open Connectors?")) == "They manage devices.\n\nSources: Intro Doc"
+
+
+def test_streaming_stays_incremental(monkeypatch):
+    fake = FakeLLM(pieces=("The connectors manage ", "edge devices as ", "cloud nodes."))
+    monkeypatch.setattr(llm, "chat_llm", fake)
+    set_route(monkeypatch, intent="question")
+    pieces = post("What are Open Connectors?")
+    assert len(pieces) >= 3
+    assert text_of(pieces) == "The connectors manage edge devices as cloud nodes.\n\nSources: Intro Doc"
+
+
+def test_weak_matches_are_neither_shown_nor_cited(monkeypatch, fake_llm, fake_search):
+    set_route(monkeypatch, intent="question")
+    fake_search["score"] = 0.56
+    assert text_of(post("What is a HyperAI flux capacitor?")) == "Hello world"
+    assert "(none matched)" in fake_llm.calls[0][-1][1]
+
+
+def test_conversation_question_uses_history_only(monkeypatch, fake_llm, fake_search):
+    set_route(monkeypatch, intent="question")
+    post("What is HyperAI?")
+    set_route(monkeypatch, intent="question", about_conversation=True)
+    searches = len(fake_search["queries"])
+    assert text_of(post("What was my first question?")) == "Hello world"
+
+    system, *history, latest = fake_llm.calls[1]
+    assert system == ("system", prompts.ANSWER_CONVERSATION_SYSTEM)
+    assert history == [("user", "What is HyperAI?"), ("assistant", "Hello world")]
+    assert latest == ("user", "What was my first question?")
+    assert len(fake_search["queries"]) == searches  # no retrieval, no excerpts, no sources
+
+
+def test_question_survives_retrieval_outage(monkeypatch, fake_llm, fake_search):
+    set_route(monkeypatch, intent="question")
+    fake_search["fail"] = True
+    assert text_of(post("What is HyperAI?")) == "Hello world"
+
+
+def test_off_topic_is_refused_without_calling_the_llm(monkeypatch, fake_llm, fake_search):
     set_route(monkeypatch, intent="off_topic")
+    fake_search["score"] = 0.5
     assert post("What is the weather today?") == [prompts.REFUSAL]
     assert fake_llm.calls == []
+
+
+def test_question_far_from_the_knowledge_base_is_refused(monkeypatch, fake_llm, fake_search):
+    set_route(monkeypatch, intent="question")
+    fake_search["score"] = 0.5
+    assert post("How do I cook lasagna?") == [prompts.REFUSAL]
+
+
+def test_off_topic_verdict_is_rescued_by_high_similarity(monkeypatch, fake_llm, fake_search):
+    set_route(monkeypatch, intent="off_topic")
+    fake_search["score"] = 0.8
+    assert text_of(post("How are edge gadgets registered?")).startswith("Hello world")
 
 
 def test_history_is_kept_per_user(monkeypatch, fake_llm):
@@ -80,10 +167,19 @@ def test_history_is_kept_per_user(monkeypatch, fake_llm):
     post("other user", user_id="bob")
 
     alice_second, bob_first = fake_llm.calls[1], fake_llm.calls[2]
+    # history holds the raw question, not the prompt with excerpts
     assert ("user", "first question") in alice_second
     assert ("assistant", "Hello world") in alice_second
-    assert alice_second[-1] == ("user", "second question")
+    assert alice_second[-1][1].endswith("Question: second question")
     assert ("user", "first question") not in bob_first
+
+
+def test_follow_up_is_retrieved_with_the_previous_question(monkeypatch, fake_llm, fake_search):
+    set_route(monkeypatch, intent="question")
+    post("What are Open Connectors?")
+    post("who develops them?")
+    # guardrail scores the raw message; retrieval uses the history-aware query
+    assert fake_search["queries"][1] == ["who develops them?", "What are Open Connectors? who develops them?"]
 
 
 def test_failure_still_ends_with_done_and_is_not_remembered(monkeypatch):

@@ -6,11 +6,12 @@ device nodes, open connectors, swarms, orchestration, and application descriptor
 native apps and device apps that are written in the IDE.
 
 Classify the user's LATEST message. Reply with ONE JSON object and nothing else:
-{"intent": "...", "path": null, "app_kind": null, "image": null, "description": null}
+{"intent": "...", "about_conversation": false, "path": null, "app_kind": null, "image": null, "description": null}
 
 intent is exactly one of:
 - "question": asks about HyperAI, its architecture, components, deliverables, DSL, application \
-descriptors, the IDE, or about something said earlier in this conversation
+descriptors, the IDE, or about something said earlier in this conversation; also when the user \
+tells you a fact about themselves or their HyperAI project
 - "create_file": create/generate/write a file, YAML, deployment, descriptor or application profile
 - "edit_file": change/update/modify/fix an existing file
 - "delete_file": delete/remove a file
@@ -22,6 +23,11 @@ descriptors, the IDE, or about something said earlier in this conversation
 - "off_topic": anything unrelated to HyperAI or the IDE (weather, sports, poems, jokes, recipes, \
 news, maths, general trivia or general programming help)
 
+"about_conversation" is true only for a "question" that the documentation cannot answer but the \
+conversation can: what the user said or asked earlier, facts about the user, their team or their \
+project, a summary of the chat, or the user stating such a fact. It is false for questions about \
+HyperAI itself, including follow-up questions.
+
 slots (null when not given):
 - "path": the file or folder path/name the user mentioned
 - "app_kind": "device" only if the user says device, edge device, Android or ESP32; "native" for \
@@ -31,79 +37,75 @@ any other file creation; otherwise null
 
 If the user refers to "it"/"that file" use the conversation to decide the intent, and leave path null."""
 
-# (conversation, latest message, expected JSON)
-ROUTER_EXAMPLES: list[tuple[str, str, str]] = [
-    (
-        "(none)",
-        "What is HyperAI?",
-        '{"intent": "question", "path": null, "app_kind": null, "image": null, "description": null}',
-    ),
-    (
-        "(none)",
-        "What is the weather today?",
-        '{"intent": "off_topic", "path": null, "app_kind": null, "image": null, "description": null}',
-    ),
+_NGINX = "user: Create a deployment YAML for nginx\nassistant: Created nginx.yaml"
+_ORBIT = (
+    "user: Our HyperAI app is called orbit-tracker\nassistant: Noted.\n"
+    "user: What are Open Connectors?\nassistant: Open Connectors link HyperAI to edge devices."
+)
+
+# (conversation, latest message, expected route; omitted fields are false/null)
+ROUTER_EXAMPLES: list[tuple[str, str, dict]] = [
+    ("(none)", "What is HyperAI?", {"intent": "question"}),
+    ("(none)", "What is the weather today?", {"intent": "off_topic"}),
     (
         "(none)",
         "Create a deployment YAML for a service using the nginx Docker image",
-        '{"intent": "create_file", "path": null, "app_kind": "native", "image": "nginx", '
-        '"description": "deployment for an nginx service"}',
+        {"intent": "create_file", "app_kind": "native", "image": "nginx",
+         "description": "deployment for an nginx service"},
     ),
-    (
-        "(none)",
-        "make a folder named demo",
-        '{"intent": "create_folder", "path": "demo", "app_kind": null, "image": null, "description": null}',
-    ),
-    (
-        "user: Create a deployment YAML for nginx\nassistant: Created nginx.yaml",
-        "Change the memory to 2Gi",
-        '{"intent": "edit_file", "path": null, "app_kind": null, "image": null, '
-        '"description": "set memory to 2Gi"}',
-    ),
-    (
-        "user: Create a deployment YAML for nginx\nassistant: Created nginx.yaml",
-        "Delete it",
-        '{"intent": "delete_file", "path": null, "app_kind": null, "image": null, "description": null}',
-    ),
+    ("(none)", "make a folder named demo", {"intent": "create_folder", "path": "demo"}),
+    (_NGINX, "Change the memory to 2Gi", {"intent": "edit_file", "description": "set memory to 2Gi"}),
+    (_NGINX, "Delete it", {"intent": "delete_file"}),
     (
         "(none)",
         "Write an app descriptor for an Android camera app on an edge device, save it as apps/cam.yaml",
-        '{"intent": "create_file", "path": "apps/cam.yaml", "app_kind": "device", "image": null, '
-        '"description": "Android camera app"}',
+        {"intent": "create_file", "path": "apps/cam.yaml", "app_kind": "device",
+         "description": "Android camera app"},
     ),
+    ("(none)", "is nginx.yaml valid?", {"intent": "validate_file", "path": "nginx.yaml"}),
+    ("(none)", "Write me a poem about pizza", {"intent": "off_topic"}),
+    (_ORBIT, "and who develops them?", {"intent": "question"}),
+    (_ORBIT, "What did I say my app was called?", {"intent": "question", "about_conversation": True}),
     (
         "(none)",
-        "is nginx.yaml valid?",
-        '{"intent": "validate_file", "path": "nginx.yaml", "app_kind": null, "image": null, "description": null}',
+        "I'm Ana from team Kestrel, we are building a HyperAI device app",
+        {"intent": "question", "about_conversation": True},
     ),
-    (
-        "(none)",
-        "Write me a poem about pizza",
-        '{"intent": "off_topic", "path": null, "app_kind": null, "image": null, "description": null}',
-    ),
-    (
-        "user: What are Open Connectors?\nassistant: Open Connectors link HyperAI to external systems.",
-        "and who develops them?",
-        '{"intent": "question", "path": null, "app_kind": null, "image": null, "description": null}',
-    ),
-    (
-        "(none)",
-        "hi, what can you do?",
-        '{"intent": "smalltalk", "path": null, "app_kind": null, "image": null, "description": null}',
-    ),
-    (
-        "(none)",
-        "remove the folder old_configs",
-        '{"intent": "delete_folder", "path": "old_configs", "app_kind": null, "image": null, "description": null}',
-    ),
+    (_ORBIT, "What was my first question?", {"intent": "question", "about_conversation": True}),
+    ("(none)", "hi, what can you do?", {"intent": "smalltalk"}),
+    ("(none)", "remove the folder old_configs", {"intent": "delete_folder", "path": "old_configs"}),
 ]
 
 ROUTER_USER = "Conversation so far:\n{conversation}\n\nLatest message: {text}"
 
 ANSWER_SYSTEM = """You are Hyperion, the assistant inside the HyperAI IDE. HyperAI (HYPER-AI) is an \
 EU research project about the edge-to-cloud computing continuum.
-Answer the user's question about HyperAI concisely (at most a few short paragraphs). Use the \
-conversation so far for context. If you are not sure, say you don't know instead of guessing."""
+
+Rules:
+- Answer ONLY from the documentation excerpts in the user's message and from the conversation so far.
+- If they do not contain the answer, reply exactly: "I don't know based on the HyperAI documentation."
+- Never use outside knowledge and never invent field names, components or numbers.
+- Be concise: a short paragraph, or a short list when enumerating.
+- Write the answer directly. Do not mention "excerpts" or document names and do not start with \
+"According to". Never write a "Sources" line: the sources are added automatically."""
+
+ANSWER_USER = "Documentation excerpts:\n\n{context}\n\nQuestion: {question}"
+
+ANSWER_USER_NO_CONTEXT = "Documentation excerpts: (none matched)\n\nQuestion: {question}"
+
+ANSWER_CONVERSATION_SYSTEM = """You are Hyperion, the assistant inside the HyperAI IDE. The user's \
+message is about this conversation, not about the documentation.
+- If the user asks about something said earlier, answer from the conversation so far. If it was \
+never said, say so.
+- If the user tells you something about themselves or their project, acknowledge it in one short \
+sentence.
+Be brief."""
+
+DONT_KNOW_MARK = "don't know based on"
+
+SOURCES_MARK = "Sources:"
+
+SOURCES = "\n\n" + SOURCES_MARK + " {titles}"
 
 REFUSAL = (
     "Sorry, I can only help with HyperAI: questions about the platform and its documentation, "

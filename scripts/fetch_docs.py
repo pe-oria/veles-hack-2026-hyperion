@@ -11,14 +11,15 @@ from pathlib import Path
 import httpx
 
 BASE = "https://ide-tutorial.hyperai.di.uoa.gr"
+# file name -> (url path, human-readable title cited in answers)
 PAGES = {
-    "tutorial_intro": "/",
-    "tutorial_quick_start": "/quick-start-demo/",
-    "tutorial_ide_guide": "/ide-guide/",
-    "dsl_native_apps": "/dsl/native-apps/",
-    "dsl_device_apps": "/dsl/devices/",
-    "cookbook_examples": "/cookbook/",
-    "hyperion_actions": "/hyperion-agent/",
+    "tutorial_intro": ("/", "IDE Tutorial - Introduction"),
+    "tutorial_quick_start": ("/quick-start-demo/", "IDE Tutorial - Quick Start Demo"),
+    "tutorial_ide_guide": ("/ide-guide/", "IDE Tutorial - IDE Guide"),
+    "dsl_native_apps": ("/dsl/native-apps/", "DSL - Defining Native Applications"),
+    "dsl_device_apps": ("/dsl/devices/", "DSL - Defining Device Applications"),
+    "cookbook_examples": ("/cookbook/", "Cookbook & Examples"),
+    "hyperion_actions": ("/hyperion-agent/", "Hyperion Actions"),
 }
 OUT = Path(__file__).resolve().parent.parent / "knowledge"
 
@@ -80,13 +81,13 @@ class ArticleText(HTMLParser):
 def main() -> None:
     OUT.mkdir(exist_ok=True)
     with httpx.Client(timeout=20, follow_redirects=True) as client:
-        for name, path in PAGES.items():
+        for name, (path, title) in PAGES.items():
             html = client.get(BASE + path).raise_for_status().text
             parser = ArticleText()
             parser.feed(html)
             body = parser.text()
             (OUT / f"{name}.md").write_text(
-                f"---\nsource: {BASE}{path}\ntitle: {name}\n---\n\n{body}\n", encoding="utf-8"
+                f"---\nsource: {BASE}{path}\ntitle: {title}\n---\n\n{body}\n", encoding="utf-8"
             )
             print(f"saved {name}.md ({len(body)} chars)")
 

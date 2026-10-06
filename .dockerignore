@@ -5,7 +5,6 @@ __pycache__/
 .git
 .idea
 .pytest_cache
-.cache
 docs
 notebooks
 data

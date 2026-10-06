@@ -1,5 +1,7 @@
 """Intent + slot extraction: one narrow JSON-mode LLM call."""
 
+import json
+
 from typing import Literal
 
 from pydantic import BaseModel, ValidationError, field_validator
@@ -23,6 +25,7 @@ Intent = Literal[
 
 class Route(BaseModel):
     intent: Intent = "question"
+    about_conversation: bool = False  # answerable from the chat history, not from the docs
     path: str | None = None
     app_kind: Literal["native", "device"] | None = None
     image: str | None = None
@@ -40,7 +43,7 @@ def build_messages(text: str, session: Session) -> list[tuple[str, str]]:
     messages = [("system", prompts.ROUTER_SYSTEM)]
     for conversation, example, answer in prompts.ROUTER_EXAMPLES:
         messages.append(("human", prompts.ROUTER_USER.format(conversation=conversation, text=example)))
-        messages.append(("ai", answer))
+        messages.append(("ai", json.dumps(Route(**answer).model_dump())))
     messages.append(
         ("human", prompts.ROUTER_USER.format(conversation=session.transcript(), text=text[:1000]))
     )
@@ -54,7 +57,9 @@ def parse_route(data: dict) -> Route:
     except ValidationError:
         pass
     try:
-        return Route.model_validate({"intent": data.get("intent")})
+        return Route.model_validate(
+            {"intent": data.get("intent"), "about_conversation": data.get("about_conversation") is True}
+        )
     except ValidationError:
         return Route()
 

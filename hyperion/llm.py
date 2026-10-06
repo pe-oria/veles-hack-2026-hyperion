@@ -4,6 +4,8 @@ import json
 import logging
 import os
 
+import httpx
+import numpy as np
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 
@@ -12,6 +14,8 @@ log = logging.getLogger("hyperion")
 
 BASE_URL = "https://legion1.di.uoa.gr/v1"
 MODEL = "llama3.1"
+EMBED_MODEL = "nomic-embed-text"
+EMBED_BATCH = 32
 
 API_KEY = os.environ.get("API_KEY", "")
 if not API_KEY:
@@ -46,3 +50,24 @@ async def ask_json(messages: list[tuple[str, str]]) -> dict:
         log.warning("router returned non-JSON: %r", reply.text[:200])
         return {}
     return data if isinstance(data, dict) else {}
+
+
+async def embed(texts: list[str], kind: str) -> np.ndarray:
+    """Embed texts as unit vectors. `kind` is the nomic task prefix: search_document | search_query.
+
+    Plain HTTP: the OpenAI SDK always sends `encoding_format`, which legion1 rejects.
+    """
+    vectors: list[list[float]] = []
+    async with httpx.AsyncClient(timeout=60) as client:
+        for start in range(0, len(texts), EMBED_BATCH):
+            batch = [f"{kind}: {text}" for text in texts[start : start + EMBED_BATCH]]
+            response = await client.post(
+                f"{BASE_URL}/embeddings",
+                headers={"Authorization": f"Bearer {_KEY}"},
+                json={"model": EMBED_MODEL, "input": batch},
+            )
+            response.raise_for_status()
+            data = sorted(response.json()["data"], key=lambda item: item["index"])
+            vectors.extend(item["embedding"] for item in data)
+    matrix = np.asarray(vectors, dtype=np.float32)
+    return matrix / np.linalg.norm(matrix, axis=1, keepdims=True)

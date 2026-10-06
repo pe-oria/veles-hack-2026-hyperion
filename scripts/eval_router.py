@@ -15,6 +15,11 @@ from hyperion.session import Session  # noqa: E402
 
 NGINX = [("Create a deployment YAML for a service using the nginx Docker image", "Created nginx.yaml")]
 
+ORBIT = [
+    ("We are team Falcon and our HyperAI app is named sky-watch", "Noted."),
+    ("What are Open Connectors?", "Open Connectors manage edge devices as cloud nodes."),
+]
+
 # (history, message, expected intent, expected slots)
 CASES: list[tuple[list, str, str, dict]] = [
     ([], "What is HyperAI?", "question", {}),
@@ -24,6 +29,16 @@ CASES: list[tuple[list, str, str, dict]] = [
     ([], "Which fields are required in a native application profile?", "question", {}),
     ([], "What does deliverable D4.3 cover?", "question", {}),
     ([("What is HyperAI?", "HyperAI is an EU project.")], "Tell me more about its methodology", "question", {}),
+    (ORBIT, "What is my app called?", "question", {"about_conversation": True}),
+    (ORBIT, "what did I ask you first?", "question", {"about_conversation": True}),
+    (ORBIT, "Summarise what we discussed so far", "question", {"about_conversation": True}),
+    ([], "My team is called Orbit and our HyperAI app is orbit-tracker.", "question", {"about_conversation": True}),
+    (ORBIT, "What is a DeviceNode?", "question", {"about_conversation": False}),
+    (ORBIT, "and how are they registered?", "question", {"about_conversation": False}),
+    (ORBIT, "who manages them?", "question", {"about_conversation": False}),
+    ([], "What is HyperAI?", "question", {"about_conversation": False}),
+    ([], "How do I deploy my first web server?", "question", {"about_conversation": False}),
+    (ORBIT, "Tell me a joke", "off_topic", {}),
     ([], "What is the weather today?", "off_topic", {}),
     ([], "Write me a poem about pizza", "off_topic", {}),
     ([], "Who won the world cup in 2018?", "off_topic", {}),
@@ -57,9 +72,10 @@ async def run_case(history, text, intent, slots) -> tuple[bool, str]:
         session.add_turn(user, assistant)
     got = guardrails.apply(await router.route(text, session), text)
     ok = got.intent == intent and all(
-        (getattr(got, k) or "").lower().startswith(v.lower()) for k, v in slots.items()
+        getattr(got, k) == v if isinstance(v, bool) else (getattr(got, k) or "").lower().startswith(v.lower())
+        for k, v in slots.items()
     )
-    return ok, f"{'ok  ' if ok else 'FAIL'} {text!r} -> {got.model_dump(exclude_none=True)}" + (
+    return ok, f"{'ok  ' if ok else 'FAIL'} {text!r} -> {got.model_dump(exclude_defaults=True)}" + (
         "" if ok else f"   expected {intent} {slots}"
     )
 
