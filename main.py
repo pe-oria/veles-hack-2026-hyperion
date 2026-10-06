@@ -1,31 +1,18 @@
 import json
 import logging
-import os
+import time
+from collections.abc import AsyncIterator
 
-from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from langchain_openai import ChatOpenAI
 from pydantic import BaseModel
-
-load_dotenv()
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("hyperion")
 
-API_KEY = os.environ.get("API_KEY", "")
-if not API_KEY:
-    log.warning("API_KEY is not set - the service starts, but LLM calls will fail")
-BASE_URL = "https://legion1.di.uoa.gr/v1"
-MODEL = "llama3.1"
-
-llm = ChatOpenAI(
-    model=MODEL,
-    base_url=BASE_URL,
-    api_key=API_KEY or "missing",  # the client refuses to be built with an empty key
-    max_completion_tokens=2048,
-)
+from hyperion import guardrails, llm, prompts, router  # noqa: E402
+from hyperion.session import Session, get_session  # noqa: E402
 
 app = FastAPI(title="Hyperion Agent")
 
@@ -46,14 +33,45 @@ def sse(payload: dict) -> str:
     return f"data: {json.dumps(payload)}\n\n"
 
 
-async def generate_reply(request: ChatRequest):
+async def answer_question(text: str, session: Session) -> AsyncIterator[str]:
+    """Stream an answer that sees the session history (RAG context is added in M2)."""
+    messages = [("system", prompts.ANSWER_SYSTEM), *session.history, ("user", text)]
+    async for chunk in llm.chat_llm.astream(messages):
+        if chunk.text:
+            yield chunk.text
+
+
+async def run_turn(text: str, session: Session) -> AsyncIterator[str]:
+    """Yield the text increments of one reply. Python owns the control flow."""
+    route = guardrails.apply(await router.route(text, session), text)
+    log.info("intent=%s slots=%s", route.intent, route.model_dump(exclude={"intent"}, exclude_none=True))
+
+    if route.intent == "off_topic":
+        yield prompts.REFUSAL
+    elif route.intent == "smalltalk":
+        yield prompts.SMALLTALK
+    elif route.intent == "question":
+        async for piece in answer_question(text, session):
+            yield piece
+    else:
+        yield prompts.NOT_IMPLEMENTED.format(intent=route.intent)
+
+
+async def generate_reply(request: ChatRequest) -> AsyncIterator[str]:
+    session = get_session(request.user_id)
+    started = time.perf_counter()
+    reply: list[str] = []
     try:
-        async for chunk in llm.astream(request.text):
-            if chunk.text:
-                yield sse({"response": chunk.text})
+        async for piece in run_turn(request.text, session):
+            reply.append(piece)
+            yield sse({"response": piece})
     except Exception:
-        log.exception("LLM call failed for user %s", request.user_id)
-        yield sse({"response": "Sorry, I could not reach the language model. Please try again."})
+        log.exception("turn failed for user %s", request.user_id)
+        reply.append(prompts.LLM_ERROR)
+        yield sse({"response": prompts.LLM_ERROR})
+    else:
+        session.add_turn(request.text, "".join(reply))
+    log.info("turn done user=%s latency=%.2fs", request.user_id, time.perf_counter() - started)
     yield "data: [DONE]\n\n"
 
 

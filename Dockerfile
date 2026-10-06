@@ -7,6 +7,7 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --no-dev --frozen --no-install-project
 
 COPY main.py helpers.py ./
+COPY hyperion ./hyperion
 
 ENV IDE_BACKEND_URL=http://host.docker.internal:3001/api
 

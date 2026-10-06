@@ -36,7 +36,7 @@ event `data: <json>\n\n` — `{"response": "<incremental text>"}` or an IDE acti
 ## Status
 
 - [x] M0 – starter running locally and as a Docker image (amd64 + arm64)
-- [ ] M1 – sessions + router + guardrail
+- [x] M1 – sessions + router + guardrail
 - [ ] M2 – RAG over `knowledge/`
 - [ ] M3 – file actions
 - [ ] M4 – human-in-the-loop confirmation
