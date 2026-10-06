@@ -11,7 +11,31 @@ class Session:
     history: list[tuple[str, str]] = field(default_factory=list)  # (role, text)
     pending_action: dict | None = None
     last_file: str | None = None
-    files: list[str] = field(default_factory=list)
+    files: list[str] = field(default_factory=list)  # there is no "list files" endpoint: we keep track
+    last_folder: str | None = None
+    folders: list[str] = field(default_factory=list)
+
+    def remember_file(self, path: str) -> None:
+        if path not in self.files:
+            self.files.append(path)
+        self.last_file = path
+
+    def forget_file(self, path: str) -> None:
+        self.files = [known for known in self.files if known != path]
+        if self.last_file == path:
+            self.last_file = self.files[-1] if self.files else None
+
+    def remember_folder(self, path: str) -> None:
+        if path not in self.folders:
+            self.folders.append(path)
+        self.last_folder = path
+
+    def forget_folder(self, path: str) -> None:
+        self.folders = [known for known in self.folders if known != path and not known.startswith(f"{path}/")]
+        if self.last_folder not in self.folders:
+            self.last_folder = self.folders[-1] if self.folders else None
+        for known in [file for file in self.files if file.startswith(f"{path}/")]:
+            self.forget_file(known)
 
     def add_turn(self, user_text: str, assistant_text: str) -> None:
         self.history.append(("user", user_text[:MAX_CHARS]))

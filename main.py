@@ -13,7 +13,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger("hyperion")
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
-from hyperion import guardrails, llm, prompts, rag, router  # noqa: E402
+from hyperion import fileops, guardrails, llm, prompts, rag, router  # noqa: E402
 from hyperion.session import Session, get_session  # noqa: E402
 
 
@@ -106,8 +106,8 @@ async def retrieve_for(text: str, session: Session) -> tuple[float | None, rag.H
     return (raw[0][1] if raw else None), contextual
 
 
-async def run_turn(text: str, session: Session) -> AsyncIterator[str]:
-    """Yield the text increments of one reply. Python owns the control flow."""
+async def run_turn(text: str, session: Session) -> AsyncIterator[fileops.Event]:
+    """Yield the text increments (str) and IDE actions (dict) of one reply. Python owns the control flow."""
     route = await router.route(text, session)
     similarity, hits = None, []
     if route.intent == "off_topic" or (route.intent == "question" and not route.about_conversation):
@@ -131,17 +131,23 @@ async def run_turn(text: str, session: Session) -> AsyncIterator[str]:
         async for piece in answer_question(text, session, hits):
             yield piece
     else:
-        yield prompts.NOT_IMPLEMENTED.format(intent=route.intent)
+        async for event in fileops.handle(route, text, session):
+            yield event
 
 
 async def generate_reply(request: ChatRequest) -> AsyncIterator[str]:
     session = get_session(request.user_id)
     started = time.perf_counter()
     reply: list[str] = []
+    done: list[str] = []
     try:
-        async for piece in run_turn(request.text, session):
-            reply.append(piece)
-            yield sse({"response": piece})
+        async for event in run_turn(request.text, session):
+            if isinstance(event, dict):
+                done.append(f"{event['action']}:{event['path']}")
+                yield sse(event)
+            else:
+                reply.append(event)
+                yield sse({"response": event})
     except Exception:
         log.exception("turn failed for user %s", request.user_id)
         reply.append(prompts.LLM_ERROR)
@@ -149,7 +155,7 @@ async def generate_reply(request: ChatRequest) -> AsyncIterator[str]:
     else:
         # the model imitates a "Sources:" line it sees in its own earlier answers
         session.add_turn(request.text, "".join(reply).split(prompts.SOURCES_MARK)[0].rstrip())
-    log.info("turn done user=%s latency=%.2fs", request.user_id, time.perf_counter() - started)
+    log.info("turn done user=%s latency=%.2fs actions=%s", request.user_id, time.perf_counter() - started, done)
     yield "data: [DONE]\n\n"
 
 

@@ -191,5 +191,24 @@ def test_failure_still_ends_with_done_and_is_not_remembered(monkeypatch):
     assert session.get_session("u1").history == []
 
 
+def test_actions_are_streamed_as_their_own_events_and_kept_out_of_history(monkeypatch):
+    async def handle(route, text, sess):
+        yield "Creating `a.yaml`."
+        yield {"action": "create_file", "path": "a.yaml", "content": "x: 1\n"}
+        yield " Done."
+
+    monkeypatch.setattr(main.fileops, "handle", handle)
+    set_route(monkeypatch, intent="create_file")
+    response = client.post("/chat", json={"user_id": "u1", "text": "make a.yaml"})
+    events = [json.loads(e.removeprefix("data: ")) for e in response.text.split("\n\n") if e and "[DONE]" not in e]
+    assert events == [
+        {"response": "Creating `a.yaml`."},
+        {"action": "create_file", "path": "a.yaml", "content": "x: 1\n"},
+        {"response": " Done."},
+    ]
+    assert response.text.endswith("data: [DONE]\n\n")
+    assert session.get_session("u1").history[-1] == ("assistant", "Creating `a.yaml`. Done.")
+
+
 def test_chat_rejects_malformed_body():
     assert client.post("/chat", json={"text": "hi"}).status_code == 422

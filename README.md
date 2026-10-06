@@ -43,7 +43,14 @@ event `data: <json>\n\n` — `{"response": "<incremental text>"}` or an IDE acti
    against the embedding similarity of the message to the knowledge base.
 3. **RAG** – questions retrieve the top chunks of `knowledge/` (`nomic-embed-text`, cosine) and are
    answered only from those excerpts; the source documents are appended to the answer.
-4. **Memory** – the last turns of each `user_id` are kept and given to the router and the answer.
+4. **File actions** – new descriptors are rendered by Python templates from a few parameters the
+   LLM extracts, so they are valid by construction. Edits are whole-file rewrites by the LLM; after
+   each write the agent waits for the IDE to save the file, runs `validate_file`, and lets the LLM
+   repair reported errors (at most twice). Paths are sanitised and must come from the user's words.
+5. **Memory** – the last turns of each `user_id` are kept and given to the router and the answer.
+
+`scripts/ide_sim.py "<message>" ...` plays the IDE from a terminal: it prints the reply and applies
+the agent's actions to a local `ide-backend`, which is what makes validation testable end to end.
 
 `scripts/eval_router.py` and `scripts/eval_rag.py` check the router and retrieval against the live
 models; `scripts/fetch_docs.py` refreshes the tutorial pages in `knowledge/`.
@@ -53,7 +60,7 @@ models; `scripts/fetch_docs.py` refreshes the tutorial pages in `knowledge/`.
 - [x] M0 – starter running locally and as a Docker image (amd64 + arm64)
 - [x] M1 – sessions + router + guardrail
 - [x] M2 – RAG over `knowledge/`
-- [ ] M3 – file actions
+- [x] M3 – file actions
 - [ ] M4 – human-in-the-loop confirmation
 - [ ] M5 – polish
 

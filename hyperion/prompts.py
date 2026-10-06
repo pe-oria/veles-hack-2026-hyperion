@@ -119,6 +119,106 @@ SMALLTALK = (
     "for a service using the nginx Docker image\"."
 )
 
-NOT_IMPLEMENTED = "I understood this as a `{intent}` request, but file actions are not available yet."
-
 LLM_ERROR = "Sorry, I could not reach the language model. Please try again."
+
+
+# --- file actions ---------------------------------------------------------------------------
+
+PARAMS_SYSTEM = """Extract the parameters of the application the user wants to describe. Reply with \
+ONE JSON object and nothing else. Use null for anything the user did not state - never guess.
+
+{"name": null, "description": null, "owner": null, "lifecycle_phase": null, "image": null, \
+"tag": null, "port": null, "cpu": null, "memory": null, "storage": null, "workload_kind": null, \
+"apk_url": null, "package_name": null, "binary_url": null, "chip": null, "device_name": null}
+
+- name: short lowercase-hyphen application name
+- description: one sentence about the application
+- lifecycle_phase: development | testing | production
+- image, tag: Docker image and tag (tag only if stated)
+- port: integer; cpu: e.g. "500m" or "2"; memory, storage: e.g. "512Mi", "2Gi"
+- workload_kind: "AndroidApk" for an Android app/APK, "esp32Binary" for ESP32 firmware, \
+"DockerImage" for a container on a device; null otherwise
+- apk_url, binary_url: only real URLs the user gave; package_name: Android package id
+- chip: esp32 | esp32s2 | esp32s3 | esp32c3 | esp32c6 | esp32h2"""
+
+PARAMS_EXAMPLES: list[tuple[str, str]] = [
+    (
+        "Create a deployment YAML for a service using the nginx Docker image",
+        '{"name": "nginx", "description": "Nginx web server.", "owner": null, "lifecycle_phase": null, '
+        '"image": "nginx", "tag": null, "port": null, "cpu": null, "memory": null, "storage": null, '
+        '"workload_kind": null, "apk_url": null, "package_name": null, "binary_url": null, "chip": null, '
+        '"device_name": null}',
+    ),
+    (
+        "Generate a production application profile for a redis:7 cache with 512Mi of memory and half a "
+        "core, owned by team Kestrel, save it as cache/redis.yaml",
+        '{"name": "redis-cache", "description": "Redis cache.", "owner": "team Kestrel", '
+        '"lifecycle_phase": "production", "image": "redis", "tag": "7", "port": null, "cpu": "0.5", '
+        '"memory": "512Mi", "storage": null, "workload_kind": null, "apk_url": null, "package_name": null, '
+        '"binary_url": null, "chip": null, "device_name": null}',
+    ),
+    (
+        "I need a device app descriptor for our Android camera app com.acme.cam, the apk is at "
+        "https://acme.io/cam.apk, deploy it to device pixel-7",
+        '{"name": "camera-app", "description": "Android camera application.", "owner": null, '
+        '"lifecycle_phase": null, "image": null, "tag": null, "port": null, "cpu": null, "memory": null, '
+        '"storage": null, "workload_kind": "AndroidApk", "apk_url": "https://acme.io/cam.apk", '
+        '"package_name": "com.acme.cam", "binary_url": null, "chip": null, "device_name": "pixel-7"}',
+    ),
+    (
+        "write a descriptor for an ESP32-S3 temperature sensor firmware",
+        '{"name": "temperature-sensor", "description": "ESP32 temperature sensor firmware.", "owner": null, '
+        '"lifecycle_phase": null, "image": null, "tag": null, "port": null, "cpu": null, "memory": null, '
+        '"storage": null, "workload_kind": "esp32Binary", "apk_url": null, "package_name": null, '
+        '"binary_url": null, "chip": "esp32s3", "device_name": null}',
+    ),
+]
+
+EDIT_SYSTEM = """You edit files in the HyperAI IDE. Apply the requested change and return the \
+COMPLETE updated file inside one ``` code block, with no explanation.
+- Change only what is asked. Keep every other line, key and value exactly as it is.
+- Keep the file valid YAML with the same indentation style.
+{rules}"""
+
+NATIVE_RULES = """This is a HyperAI native application profile (root key applicationProfile). Rules:
+- specs.resources.cpu is millicores as a string, e.g. "500m" (1 core = "1000m")
+- specs.resources.memory and storage are strings with Mi, Gi or Ti, e.g. "2Gi", "512Mi"
+- specs.network.ports is a list of {{port: <integer>, protocol: "TCP", publicExposure: true|false}}
+- metadata.lifecyclePhase is development, testing or production
+- metadata.schemaVersion is "1.1.0"; metadata.type is "native"
+- specs.runtime.executionType is container or vm; containerImage has uri and tag
+- specs.qos values are strings with units: startupTime "10s", availability "99.0%", \
+latencyToleranceMax "150ms", energyCost "0.5kWh"
+- specs.constraints.isHighlyAvailable is a boolean; supportedArchitectures is a list of strings
+- do not invent keys that are not already in the file unless they are listed above"""
+
+DEVICE_RULES = """This is a HyperAI device application manifest (apiVersion hyper.ai/v1, kind Application). Rules:
+- spec.app.lifecyclePhase is development, testing or production; spec.app.type is "device"
+- spec.workload.kind is DockerImage, AndroidApk or esp32Binary, with exactly one matching block: \
+dockerImage {{image, imagePullPolicy}}, androidApk {{apkUrl, packageName}}, esp32Binary {{binaryUrl, chip, flash}}
+- spec.resources uses objects: cpu {{value: <number>, unit: "millicores"|"cores"}}, \
+memory/storage {{value: <number>, unit: "MiB"|"GiB"}}
+- spec.network.ports is a list of {{port: <integer>, protocol: "HTTP"}}; networkBandwidthMin {{value, unit: "Mbps"}}
+- spec.qos values are objects: latencyToleranceMax/startupTime {{value, unit: "ms"|"s"}}, \
+energyCost {{value, unit: "W"|"mW"}}, availability {{value: 0..1, unit: "fraction"}}, \
+monetaryCost {{value, currency, per: "hour"}}; resilience is a string
+- spec.constraints: schedulingPriority integer, isHighlyAvailable boolean, the rest strings
+- do not invent keys that are not already in the file unless they are listed above"""
+
+GENERIC_RULES = ""
+
+EDIT_USER = "Current file:\n```\n{content}```\n\nRequested change: {instruction}"
+
+REPAIR_USER = (
+    "Current file:\n```\n{content}```\n\nThe HyperAI validator reported these errors. Fix all of them "
+    "and change nothing else:\n{errors}"
+)
+
+PLAIN_FILE_SYSTEM = """You write the content of a file for the user of the HyperAI IDE. Return ONLY \
+the file content inside one ``` code block, with no explanation. Keep it short and to the point."""
+
+PLAIN_FILE_USER = "File: {path}\nRequest: {text}"
+
+EXPLAIN_FILE_SYSTEM = """You are Hyperion, the assistant inside the HyperAI IDE. Explain the file \
+the user shows you in a few short sentences or bullet points: what application it describes and \
+its main settings (image, resources, ports). Use only what is in the file."""

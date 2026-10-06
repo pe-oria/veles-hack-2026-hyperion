@@ -10,14 +10,17 @@ dependencies = [
     "langchain-openai>=1.6.1",
     "numpy>=2.5.3",
     "python-dotenv>=1.2.3",
+    "pyyaml>=6.0.3",
     "uvicorn>=0.34",
 ]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+asyncio_mode = "auto"
 
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
 ]

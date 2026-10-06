@@ -31,6 +31,15 @@ chat_llm = ChatOpenAI(
     max_completion_tokens=1024,
 )
 
+# whole-file rewrites: deterministic, room for a full descriptor
+edit_llm = ChatOpenAI(
+    model=MODEL,
+    base_url=BASE_URL,
+    api_key=_KEY,
+    temperature=0,
+    max_completion_tokens=1500,
+)
+
 json_llm = ChatOpenAI(
     model=MODEL,
     base_url=BASE_URL,
