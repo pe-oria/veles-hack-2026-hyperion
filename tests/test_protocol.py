@@ -195,6 +195,34 @@ def test_history_is_kept_per_user(monkeypatch, fake_llm):
     assert ("user", "first question") not in bob_first
 
 
+def test_previous_message_is_not_allowed_to_spoil_retrieval(monkeypatch, fake_llm):
+    """After "delete redis.yaml", "What is a DeviceNode?" must be answered from its own hits."""
+    own = Chunk(title="Device Doc", section="", text="A DeviceNode is an edge device.")
+    polluted = Chunk(title="Wrong Doc", section="", text="How to delete things.")
+
+    async def search(queries, k=rag.TOP_K):
+        return [[(own, 0.73)] if query == "What is a DeviceNode?" else [(polluted, 0.66)] for query in queries]
+
+    monkeypatch.setattr(rag, "search", search)
+    session.get_session("u1").add_turn("delete redis.yaml", "Delete redis.yaml? (yes/no)")
+    set_route(monkeypatch, intent="question")
+    assert text_of(post("What is a DeviceNode?")) == "Hello world\n\nSources: Device Doc"
+    assert "A DeviceNode is an edge device." in fake_llm.calls[0][-1][1]
+
+
+def test_a_real_follow_up_still_uses_the_history_aware_query(monkeypatch, fake_llm):
+    alone = Chunk(title="Vague Doc", section="", text="Something vague.")
+    together = Chunk(title="Connectors Doc", section="", text="The cloud manages the connectors.")
+
+    async def search(queries, k=rag.TOP_K):
+        return [[(alone, 0.58)] if query == "who manages them?" else [(together, 0.82)] for query in queries]
+
+    monkeypatch.setattr(rag, "search", search)
+    session.get_session("u1").add_turn("What are Open Connectors?", "They manage edge devices.")
+    set_route(monkeypatch, intent="question")
+    assert text_of(post("who manages them?")) == "Hello world\n\nSources: Connectors Doc"
+
+
 def test_follow_up_is_retrieved_with_the_previous_question(monkeypatch, fake_llm, fake_search):
     set_route(monkeypatch, intent="question")
     post("What are Open Connectors?")

@@ -80,13 +80,21 @@ async def answer_from_conversation(text: str, session: Session) -> AsyncIterator
 
 
 async def retrieve_for(text: str, session: Session) -> tuple[float | None, rag.Hits]:
-    """Return (similarity of the raw message, hits for the history-aware query)."""
+    """Return (similarity of the raw message, the hits to answer from).
+
+    A follow-up ("who manages them?") only retrieves well together with the previous message,
+    but a standalone question after "delete redis.yaml" is spoiled by it. Both are searched and
+    the better-matching query wins.
+    """
     try:
         raw, contextual = await rag.search([text, rag.contextual_query(text, session.last_user_text())])
     except Exception:
         log.exception("retrieval failed - answering without documentation")
         return None, []
-    return (raw[0][1] if raw else None), contextual
+    if not raw:
+        return None, contextual
+    best = contextual if contextual and contextual[0][1] > raw[0][1] else raw
+    return raw[0][1], best
 
 
 async def classify(text: str, session: Session) -> tuple[router.Route, float | None, rag.Hits]:
