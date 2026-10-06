@@ -24,3 +24,6 @@ venv/
 .DS_Store
 data/raw/
 *.log
+
+# Working notes for the coding assistant - kept locally, not published
+CLAUDE.md
