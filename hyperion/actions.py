@@ -16,13 +16,13 @@ def clean_path(raw: str | None) -> str:
     if not path:
         raise PathError("I need a file or folder name for that.")
     if path.startswith(("/", "~")) or re.match(r"^[A-Za-z]:", path):
-        raise PathError(f"`{path}` is an absolute path - paths must be relative to the workspace.")
+        raise PathError(f"{path} is an absolute path - paths must be relative to the workspace.")
     parts = [part for part in path.split("/") if part not in ("", ".")]
     if ".." in parts:
-        raise PathError(f"`{path}` leaves the workspace - `..` is not allowed.")
+        raise PathError(f"{path} leaves the workspace - '..' is not allowed.")
     cleaned = "/".join(parts)
     if not cleaned or not _ALLOWED.match(cleaned):
-        raise PathError(f"`{path}` is not a valid workspace path.")
+        raise PathError(f"{path} is not a valid workspace path.")
     return cleaned
 
 

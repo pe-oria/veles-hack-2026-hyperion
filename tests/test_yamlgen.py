@@ -64,7 +64,7 @@ def test_missing_urls_become_reported_placeholders():
     assert given.placeholders == [] and given.apk_url == "https://acme.io/cam.apk"
     assert clean_params({}, "native", "redis").placeholders == []
     # no image named: nginx is only a stand-in, and the user is told
-    assert clean_params({}, "native").placeholders == ["`specs.runtime.containerImage` (nginx)"]
+    assert clean_params({}, "native").placeholders == ["specs.runtime.containerImage (nginx)"]
 
 
 def test_device_resources_use_value_unit_objects():

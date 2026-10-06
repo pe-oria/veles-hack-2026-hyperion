@@ -25,9 +25,9 @@ class FakeIde:
     async def read(self, path: str) -> File:
         matches = [p for p in self.files if p == path or ("/" not in path and p.rsplit("/", 1)[-1] == path)]
         if not matches:
-            raise IdeError("not_found", f"I could not find `{path}` in the workspace.")
+            raise IdeError("not_found", f"I could not find {path} in the workspace.")
         if len(matches) > 1:
-            raise IdeError("ambiguous", f"Several files are named `{path}`.", matches)
+            raise IdeError("ambiguous", f"Several files are named {path}.", matches)
         return File(matches[0], self.files[matches[0]])
 
     async def find(self, path: str) -> File | None:
@@ -95,7 +95,9 @@ async def test_create_file_renders_a_valid_profile_and_validates_it(workspace):
         workspace, session, "Create a deployment YAML for nginx", intent="create_file", app_kind="native", image="nginx"
     )
     assert done == [actions.create_file("nginx.yaml", NGINX)]
-    assert "Creating `nginx.yaml`" in reply and reply.endswith("Validation passed.")
+    assert reply == (
+        "Creating nginx.yaml - a native application profile for nginx:latest.\n\nValidating with the IDE... passed."
+    )
     assert session.last_file == "nginx.yaml" and session.files == ["nginx.yaml"]
 
 
@@ -118,7 +120,7 @@ async def test_same_name_in_another_folder_does_not_block_creation(workspace):
 async def test_created_file_is_not_validated_when_the_ide_never_saves_it(workspace):
     workspace.applies = False
     reply, done = await run(workspace, Session(), "nginx yaml please", intent="create_file", image="nginx")
-    assert len(done) == 1 and "has not been validated" in reply
+    assert len(done) == 1 and reply.endswith("skipped: I could not confirm that the IDE saved the file.")
 
 
 async def test_edit_uses_the_last_file_and_shows_a_diff(workspace, fake_llm):
@@ -128,19 +130,20 @@ async def test_edit_uses_the_last_file_and_shows_a_diff(workspace, fake_llm):
 
     reply, done = await run(workspace, session, "Change the memory to 2Gi", intent="edit_file")
     assert [(event["action"], event["path"]) for event in done] == [("edit_file", "nginx.yaml")]
-    assert '-      memory: "1Gi"' in reply and '+      memory: "2Gi"' in reply
-    assert reply.endswith("Validation passed.")
+    assert reply == (
+        'Working on nginx.yaml... done:\n  - memory: "1Gi"\n  + memory: "2Gi"\n\nValidating with the IDE... passed.'
+    )
     assert 'memory: "2Gi"' in workspace.files["nginx.yaml"]
 
 
 async def test_edit_that_breaks_the_yaml_or_changes_nothing_leaves_the_file_alone(workspace, fake_llm):
     workspace.files["nginx.yaml"] = NGINX
     reply, done = await run(workspace, Session(), "make nginx.yaml better", intent="edit_file", path="nginx.yaml")
-    assert done == [] and "could not work out what to change" in reply
+    assert done == [] and reply == "Working on nginx.yaml... I could not work out what to change. Can you rephrase the change?"
 
     fake_llm["edit"] = lambda content, text: "key: [unclosed"
     reply, done = await run(workspace, Session(), "make nginx.yaml better", intent="edit_file", path="nginx.yaml")
-    assert done == [] and "left it unchanged" in reply
+    assert done == [] and "left the file unchanged" in reply
 
 
 async def test_validator_errors_after_an_edit_are_repaired(workspace, fake_llm):
@@ -152,7 +155,7 @@ async def test_validator_errors_after_an_edit_are_repaired(workspace, fake_llm):
 
     reply, done = await run(workspace, Session(), "set cpu to 2 in nginx.yaml", intent="edit_file", path="nginx.yaml")
     assert [event["action"] for event in done] == ["edit_file", "edit_file"]
-    assert "found 1 problem(s) - fixing them" in reply and reply.endswith("Validation passed.")
+    assert reply.endswith("Validating with the IDE... found 1 problem(s), fixing them.\n\nValidating again... passed.")
     assert 'cpu: "2000m"' in workspace.files["nginx.yaml"]
 
 
@@ -166,7 +169,8 @@ async def test_repair_gives_up_after_two_rounds_and_reports_the_errors(workspace
 
     reply, done = await run(workspace, Session(), "tweak nginx.yaml", intent="edit_file", path="nginx.yaml")
     assert len(done) == 1 + fileops.MAX_REPAIRS
-    assert "has 1 error(s)" in reply and "`metadata.owner` is required" in reply
+    assert "Validating again... failed." in reply
+    assert "has 1 error(s)" in reply and "metadata.owner is required" in reply
 
 
 async def test_fix_request_is_driven_by_the_validation_report(workspace, fake_llm):
@@ -181,7 +185,7 @@ async def test_fix_request_is_driven_by_the_validation_report(workspace, fake_ll
 
     fake_llm["repair"] = repair
     reply, done = await run(workspace, Session(), "Fix broken.yaml", intent="edit_file", path="broken.yaml")
-    assert seen["errors"] == errors and len(done) == 1 and reply.endswith("Validation passed.")
+    assert seen["errors"] == errors and len(done) == 1 and reply.endswith("Validating with the IDE... passed.")
 
     reply, done = await run(workspace, Session(), "Fix broken.yaml", intent="edit_file", path="broken.yaml")
     assert done == [] and "nothing to fix" in reply
@@ -206,12 +210,12 @@ async def test_delete_asks_first_and_only_acts_once_confirmed(workspace):
     session.remember_file("demo/nginx.yaml")
 
     reply, done = await run(workspace, session, "Delete it", intent="delete_file")
-    assert done == [] and reply == "Delete `demo/nginx.yaml`? (yes/no)"
+    assert done == [] and reply == "Delete demo/nginx.yaml? (yes/no)"
     assert "demo/nginx.yaml" in workspace.files and session.last_file == "demo/nginx.yaml"
     assert session.pending_action.action == actions.delete_file("demo/nginx.yaml")
 
     reply, done = await confirm_pending(workspace, session)
-    assert done == [actions.delete_file("demo/nginx.yaml")] and reply == "Deleted `demo/nginx.yaml`."
+    assert done == [actions.delete_file("demo/nginx.yaml")] and reply == "Deleted demo/nginx.yaml."
     assert workspace.files == {} and session.last_file is None and session.files == []
 
 
@@ -219,18 +223,18 @@ async def test_overwrite_asks_first_then_replaces_with_edit_file_and_validates(w
     workspace.files["nginx.yaml"] = "old content"
     session = Session()
     reply, done = await run(workspace, session, "nginx yaml please", intent="create_file", image="nginx")
-    assert done == [] and reply.startswith("`nginx.yaml` already exists. Overwrite it") and reply.endswith("(yes/no)")
+    assert done == [] and reply.startswith("nginx.yaml already exists. Overwrite it") and reply.endswith("(yes/no)")
     assert workspace.files["nginx.yaml"] == "old content"
 
     reply, done = await confirm_pending(workspace, session)
     assert done == [actions.edit_file("nginx.yaml", NGINX)]  # create_file would fail on an existing file
-    assert reply.startswith("Overwrote `nginx.yaml`") and reply.endswith("Validation passed.")
+    assert reply.startswith("Overwrote nginx.yaml") and reply.endswith("Validating with the IDE... passed.")
     assert workspace.files["nginx.yaml"] == NGINX and session.last_file == "nginx.yaml"
 
 
 async def test_missing_ambiguous_and_unnamed_files_become_messages_not_actions(workspace):
     reply, done = await run(workspace, Session(), "delete missing.yaml", intent="delete_file", path="missing.yaml")
-    assert done == [] and "could not find `missing.yaml`" in reply
+    assert done == [] and "could not find missing.yaml" in reply
 
     workspace.files.update({"a/app.yaml": "x", "b/app.yaml": "y"})
     reply, done = await run(workspace, Session(), "delete app.yaml", intent="delete_file", path="app.yaml")
@@ -270,10 +274,10 @@ async def test_folders(workspace):
 
     reply, done = await run(workspace, session, "delete that folder", intent="delete_folder")
     assert done == [] and session.folders == ["demo"]
-    assert reply == "Delete the folder `demo` and everything in it? It contains `demo/nginx.yaml`. (yes/no)"
+    assert reply == "Delete the folder demo and everything in it? It contains demo/nginx.yaml. (yes/no)"
 
     reply, done = await confirm_pending(workspace, session)
-    assert done == [actions.delete_folder("demo")] and reply == "Deleted the folder `demo`."
+    assert done == [actions.delete_folder("demo")] and reply == "Deleted the folder demo."
     assert session.folders == [] and session.files == []
 
     reply, done = await run(workspace, Session(), "delete that folder", intent="delete_folder")
@@ -286,11 +290,11 @@ async def test_validate_and_read(workspace):
     workspace.reports = [{"valid": False, "errors": [{"line": 4, "field": "a.b", "message": "is required"}],
                           "warnings": [{"line": 9, "field": "a.c", "message": "unknown field"}]}]
     reply, _ = await run(workspace, session, "Validate nginx.yaml", intent="validate_file", path="nginx.yaml")
-    assert "has 1 error(s)" in reply and "- line 4: `a.b` is required" in reply and "1 warning(s)" in reply
+    assert "has 1 error(s)" in reply and "- line 4: a.b is required" in reply and "1 warning(s)" in reply
     assert session.last_file == "nginx.yaml"
 
     reply, _ = await run(workspace, session, "show it", intent="read_file")
-    assert reply.startswith("`nginx.yaml`:\n```\napplicationProfile:")
+    assert reply.startswith("nginx.yaml:\n\napplicationProfile:")
 
 
 def test_clean_path():

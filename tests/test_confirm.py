@@ -40,7 +40,7 @@ def workspace(monkeypatch) -> dict:
 
     async def read(path):
         if path not in files:
-            raise ide.IdeError("not_found", f"I could not find `{path}` in the workspace.")
+            raise ide.IdeError("not_found", f"I could not find {path} in the workspace.")
         return File(path, files[path])
 
     async def route(text, sess):
@@ -61,8 +61,8 @@ def post(text: str) -> tuple[str, list[dict]]:
 
 
 def test_yes_executes_the_pending_delete_without_asking_the_router(workspace):
-    assert post("Delete nginx.yaml") == ("Delete `nginx.yaml`? (yes/no)", [])
-    assert post("yes") == ("Deleted `nginx.yaml`.", [actions.delete_file("nginx.yaml")])
+    assert post("Delete nginx.yaml") == ("Delete nginx.yaml? (yes/no)", [])
+    assert post("yes") == ("Deleted nginx.yaml.", [actions.delete_file("nginx.yaml")])
     assert workspace["router_calls"] == ["Delete nginx.yaml"]
     assert session.get_session("u1").pending_action is None
 
@@ -80,7 +80,7 @@ def test_any_other_reply_drops_the_action_and_is_handled_normally(workspace, mon
     post("Delete nginx.yaml")
 
     async def handle(route, text, sess):
-        yield "Created the folder `demo`."
+        yield "Created the folder demo."
 
     workspace_route = Route(intent="create_folder", path="demo")
 
@@ -91,14 +91,14 @@ def test_any_other_reply_drops_the_action_and_is_handled_normally(workspace, mon
     monkeypatch.setattr(fileops, "handle", handle)
     reply, done = post("Create a folder called demo")
     assert done == []
-    assert reply == prompts.NOT_CONFIRMED.format(question="Delete `nginx.yaml`?") + "Created the folder `demo`."
+    assert reply == prompts.NOT_CONFIRMED.format(question="Delete nginx.yaml?") + "Created the folder demo."
     assert session.get_session("u1").pending_action is None
 
 
 def test_a_vague_reply_only_reports_that_nothing_was_done(workspace):
     post("Delete nginx.yaml")
     reply, done = post("hi")  # routed as smalltalk: no greeting or refusal is tacked on
-    assert done == [] and reply == prompts.NOT_CONFIRMED.format(question="Delete `nginx.yaml`?")
+    assert done == [] and reply == prompts.NOT_CONFIRMED.format(question="Delete nginx.yaml?")
     assert "nginx.yaml" in workspace["files"]
 
 
@@ -128,8 +128,8 @@ def test_delete_it_twice_asks_then_deletes(workspace, monkeypatch):
 
     monkeypatch.setattr(router, "route", route)
     session.get_session("u1").remember_file("nginx.yaml")
-    assert post("Delete it") == ("Delete `nginx.yaml`? (yes/no)", [])
-    assert post("delete it") == ("Deleted `nginx.yaml`.", [actions.delete_file("nginx.yaml")])
+    assert post("Delete it") == ("Delete nginx.yaml? (yes/no)", [])
+    assert post("delete it") == ("Deleted nginx.yaml.", [actions.delete_file("nginx.yaml")])
 
 
 def test_confirmation_belongs_to_the_user_who_was_asked(workspace):

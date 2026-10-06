@@ -114,6 +114,27 @@ def test_streaming_stays_incremental(monkeypatch):
     assert text_of(pieces) == "The connectors manage edge devices as cloud nodes.\n\nSources: Intro Doc"
 
 
+def test_markdown_is_stripped_because_the_ide_chat_shows_raw_text(monkeypatch):
+    fake = FakeLLM(pieces=("The settings are:\n* *", "*Image*", "*: `nginx`\n", "* **Port**: 80"))
+    monkeypatch.setattr(llm, "chat_llm", fake)
+    set_route(monkeypatch, intent="question", about_conversation=True)
+    assert text_of(post("what did you make?")) == "The settings are:\n- Image: nginx\n- Port: 80"
+
+
+def test_empty_message_gets_a_hint_without_any_model_call(monkeypatch, fake_llm):
+    async def route(text, sess):
+        raise AssertionError("the router must not be called")
+
+    monkeypatch.setattr(router, "route", route)
+    assert post("   ") == [prompts.EMPTY_MESSAGE]
+
+
+def test_stream_is_not_buffered_by_proxies(monkeypatch, fake_llm):
+    set_route(monkeypatch, intent="smalltalk")
+    response = client.post("/chat", json={"user_id": "u1", "text": "hi"})
+    assert response.headers["cache-control"] == "no-cache" and response.headers["x-accel-buffering"] == "no"
+
+
 def test_weak_matches_are_neither_shown_nor_cited(monkeypatch, fake_llm, fake_search):
     set_route(monkeypatch, intent="question")
     fake_search["score"] = 0.56

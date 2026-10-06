@@ -36,13 +36,13 @@ async def read(path: str) -> File:
     except httpx.HTTPError as exc:
         raise IdeError("unreachable", "I cannot reach the IDE backend right now.") from exc
     if response.status_code == 404:
-        raise IdeError("not_found", f"I could not find `{path}` in the workspace.")
+        raise IdeError("not_found", f"I could not find {path} in the workspace.")
     if response.status_code == 409:
         matches = response.json().get("matches", [])
-        listed = ", ".join(f"`{match}`" for match in matches)
-        raise IdeError("ambiguous", f"Several files are named `{path}`: {listed}. Which one do you mean?", matches)
+        listed = ", ".join(f"{match}" for match in matches)
+        raise IdeError("ambiguous", f"Several files are named {path}: {listed}. Which one do you mean?", matches)
     if response.status_code != 200:
-        raise IdeError("error", f"The IDE could not read `{path}`.")
+        raise IdeError("error", f"The IDE could not read {path}.")
     body = response.json()
     return File(path=body.get("path", path), content=body.get("content", ""))
 
@@ -77,4 +77,4 @@ async def validate(path: str) -> dict:
     try:
         return await validate_file(path)
     except ValidateFileError as exc:
-        raise IdeError("error", f"I could not validate `{path}`: {exc}.") from exc
+        raise IdeError("error", f"I could not validate {path}: {exc}.") from exc

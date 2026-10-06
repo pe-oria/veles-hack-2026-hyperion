@@ -68,25 +68,25 @@ def format_report(report: dict) -> str:
     path, kind = report.get("path", "the file"), report.get("type") or "unknown"
     errors, warnings = report.get("errors", []), report.get("warnings", [])
     lines = [
-        f"`{path}` is a valid {kind} application descriptor."
+        f"{path} is a valid {kind} application descriptor."
         if report.get("valid")
-        else f"`{path}` ({kind}) has {len(errors)} error(s):"
+        else f"{path} ({kind}) has {len(errors)} error(s):"
     ]
-    lines += [f"- line {e.get('line')}: `{e.get('field') or 'file'}` {e.get('message')}" for e in errors[:10]]
+    lines += [f"- line {e.get('line')}: {e.get('field') or 'file'} {e.get('message')}" for e in errors[:10]]
     if warnings:
         lines.append(f"{len(warnings)} warning(s):")
-        lines += [f"- line {w.get('line')}: `{w.get('field')}` {w.get('message')}" for w in warnings[:10]]
+        lines += [f"- line {w.get('line')}: {w.get('field')} {w.get('message')}" for w in warnings[:10]]
     return "\n".join(lines)
 
 
-def diff_summary(before: str, after: str, limit: int = 10) -> str:
+def diff_summary(before: str, after: str, limit: int = 16) -> str:
+    """Changed lines as plain text ("- old" / "+ new"); the chat does not render Markdown."""
     changed = [
-        line
+        f"  {line[0]} {line[1:].strip()}"
         for line in difflib.unified_diff(before.splitlines(), after.splitlines(), lineterm="", n=0)
-        if line[:1] in "+-" and not line.startswith(("+++", "---"))
+        if line[:1] in "+-" and not line.startswith(("+++", "---")) and line[1:].strip()
     ]
-    shown = changed[:limit] + (["..."] if len(changed) > limit else [])
-    return "```diff\n" + "\n".join(shown) + "\n```"
+    return "\n".join(changed[:limit] + (["  ..."] if len(changed) > limit else []))
 
 
 def parses(content: str) -> bool:
@@ -98,25 +98,26 @@ def parses(content: str) -> bool:
 
 async def validate_and_repair(path: str, content: str) -> AsyncIterator[Event]:
     """Wait for the IDE to write the file, validate it, and let the LLM fix reported errors."""
+    yield "\n\nValidating with the IDE... "
     for attempt in range(MAX_REPAIRS + 1):
         if not await ide.wait_for_content(path, content):
-            yield "\n\nI could not confirm that the IDE saved the file, so it has not been validated."
+            yield "skipped: I could not confirm that the IDE saved the file."
             return
         try:
             report = await ide.validate(path)
         except IdeError as exc:
-            yield f"\n\n{exc}"
+            yield f"skipped. {exc}"
             return
         if report.get("valid"):
             warnings = len(report.get("warnings", []))
-            yield "\n\nValidation passed" + (f" with {warnings} warning(s)." if warnings else ".")
+            yield "passed" + (f" with {warnings} warning(s)." if warnings else ".")
             return
         errors = report.get("errors", [])
         fixed = await yamlgen.repair(content, errors) if attempt < MAX_REPAIRS else content
         if fixed.strip() == content.strip() or not parses(fixed):
-            yield "\n\n" + format_report(report)
+            yield "failed.\n\n" + format_report(report)
             return
-        yield f"\n\nThe validator found {len(errors)} problem(s) - fixing them."
+        yield f"found {len(errors)} problem(s), fixing them.\n\nValidating again... "
         content = fixed
         yield actions.edit_file(path, content)
 
@@ -125,7 +126,7 @@ async def create_folder(route: Route, text: str, session: Session) -> AsyncItera
     path = actions.clean_path(grounded_path(route, text, session))
     yield actions.create_folder(path)
     session.remember_folder(path)
-    yield f"Created the folder `{path}`."
+    yield f"Created the folder {path}."
 
 
 async def delete_folder(route: Route, text: str, session: Session) -> AsyncIterator[Event]:
@@ -134,9 +135,9 @@ async def delete_folder(route: Route, text: str, session: Session) -> AsyncItera
         raise PathError("Which folder do you mean? Give me its name or path.")
     path = actions.clean_path(named or session.last_folder)
     inside = [file for file in session.files if file.startswith(f"{path}/")]
-    contents = f" It contains {', '.join(f'`{file}`' for file in inside)}." if inside else ""
-    question = f"Delete the folder `{path}` and everything in it?{contents}"
-    session.pending_action = Pending(actions.delete_folder(path), question, f"Deleted the folder `{path}`.")
+    contents = f" It contains {', '.join(inside)}." if inside else ""
+    question = f"Delete the folder {path} and everything in it?{contents}"
+    session.pending_action = Pending(actions.delete_folder(path), question, f"Deleted the folder {path}.")
     yield f"{question} {prompts.CONFIRM_HINT}"
 
 
@@ -159,20 +160,20 @@ async def create_file(route: Route, text: str, session: Session) -> AsyncIterato
 
     content = yamlgen.render(params)
     what = "device application manifest" if params.kind == "device" else "native application profile"
-    subject = f"`{params.image}:{params.tag}`" if params.workload_kind == "DockerImage" else f"`{params.name}`"
+    subject = f"{params.image}:{params.tag}" if params.workload_kind == "DockerImage" else f"{params.name}"
     note = ""
     if params.placeholders:
         note = "\n\nI used placeholder values you need to replace: " + ", ".join(params.placeholders) + "."
 
     if await exists(path):
-        question = f"`{path}` already exists. Overwrite it with a new {what} for {subject}?"
-        done = f"Overwrote `{path}` with a new {what} for {subject}.{note}"
+        question = f"{path} already exists. Overwrite it with a new {what} for {subject}?"
+        done = f"Overwrote {path} with a new {what} for {subject}.{note}"
         # create_file fails on an existing file: replacing it is an edit_file
         session.pending_action = Pending(actions.edit_file(path, content), question, done, validate=True)
         yield f"{question} {prompts.CONFIRM_HINT}"
         return
 
-    yield f"Creating `{path}` - a {what} for {subject}."
+    yield f"Creating {path} - a {what} for {subject}."
     yield actions.create_file(path, content)
     session.remember_file(path)
     if note:
@@ -184,11 +185,11 @@ async def create_file(route: Route, text: str, session: Session) -> AsyncIterato
 async def create_plain_file(path: str, text: str, session: Session) -> AsyncIterator[Event]:
     content = await yamlgen.write_plain(path, text)
     if await exists(path):
-        question = f"`{path}` already exists. Overwrite it with new content?"
-        session.pending_action = Pending(actions.edit_file(path, content), question, f"Overwrote `{path}`.")
+        question = f"{path} already exists. Overwrite it with new content?"
+        session.pending_action = Pending(actions.edit_file(path, content), question, f"Overwrote {path}.")
         yield f"{question} {prompts.CONFIRM_HINT}"
         return
-    yield f"Creating `{path}`."
+    yield f"Creating {path}."
     yield actions.create_file(path, content)
     session.remember_file(path)
 
@@ -206,10 +207,11 @@ async def edit_file(route: Route, text: str, session: Session) -> AsyncIterator[
     file = await ide.read(target_file(route, text, session))
     session.remember_file(file.path)
     structured = actions.is_yaml(file.path)
+    yield f"Working on {file.path}... "  # the rewrite takes a couple of seconds
 
     errors = await reported_errors(file.path) if _FIX.search(text) else []
     if _FIX.search(text) and not errors and yamlgen.detect_kind(file.content):
-        yield f"`{file.path}` already passes validation - there is nothing to fix."
+        yield "it already passes validation, so there is nothing to fix."
         return
     # "fix it" says nothing about what is wrong: the validator's report is the instruction
     updated = await (yamlgen.repair(file.content, errors) if errors else yamlgen.edit(file.content, text))
@@ -217,13 +219,13 @@ async def edit_file(route: Route, text: str, session: Session) -> AsyncIterator[
         log.warning("edit of %s produced invalid YAML - retrying once", file.path)
         updated = await yamlgen.edit(file.content, text)
     if structured and not parses(updated):
-        yield f"I could not produce a valid update for `{file.path}`, so I left it unchanged."
+        yield "I could not produce a valid update, so I left the file unchanged."
         return
     if updated.strip() == file.content.strip():
-        yield f"I could not work out what to change in `{file.path}`. Can you rephrase the change?"
+        yield "I could not work out what to change. Can you rephrase the change?"
         return
 
-    yield f"Updating `{file.path}`:\n{diff_summary(file.content, updated)}"
+    yield f"done:\n{diff_summary(file.content, updated)}"
     yield actions.edit_file(file.path, updated)
     if yamlgen.detect_kind(updated):
         async for event in validate_and_repair(file.path, updated):
@@ -244,8 +246,8 @@ async def delete_file(route: Route, text: str, session: Session) -> AsyncIterato
     except IdeError as exc:
         if exc.kind != "unreachable":
             raise
-    question = f"Delete `{path}`?"
-    session.pending_action = Pending(actions.delete_file(path), question, f"Deleted `{path}`.")
+    question = f"Delete {path}?"
+    session.pending_action = Pending(actions.delete_file(path), question, f"Deleted {path}.")
     yield f"{question} {prompts.CONFIRM_HINT}"
 
 
@@ -277,13 +279,12 @@ async def read_file(route: Route, text: str, session: Session) -> AsyncIterator[
     session.remember_file(file.path)
     shown = file.content[:MAX_SHOWN_CHARS]
     if _EXPLAIN.search(text):
-        messages = [("system", prompts.EXPLAIN_FILE_SYSTEM), ("human", f"File `{file.path}`:\n```\n{shown}\n```")]
-        async for chunk in llm.chat_llm.astream(messages):
-            if chunk.text:
-                yield chunk.text
+        messages = [("system", prompts.EXPLAIN_FILE_SYSTEM), ("human", f"File {file.path}:\n\n{shown}")]
+        async for piece in llm.stream_text(messages):
+            yield piece
         return
     truncated = "\n(truncated)" if len(file.content) > MAX_SHOWN_CHARS else ""
-    yield f"`{file.path}`:\n```\n{shown.rstrip()}\n```{truncated}"
+    yield f"{file.path}:\n\n{shown.rstrip()}{truncated}"
 
 
 HANDLERS = {

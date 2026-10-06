@@ -86,6 +86,8 @@ Rules:
 - If they do not contain the answer, reply exactly: "I don't know based on the HyperAI documentation."
 - Never use outside knowledge and never invent field names, components or numbers.
 - Be concise: a short paragraph, or a short list when enumerating.
+- Plain text only: the chat cannot render Markdown. No asterisks, no backticks, no headings; start \
+list items with "- ".
 - Write the answer directly. Do not mention "excerpts" or document names and do not start with \
 "According to". Never write a "Sources" line: the sources are added automatically."""
 
@@ -99,13 +101,11 @@ message is about this conversation, not about the documentation.
 never said, say so.
 - If the user tells you something about themselves or their project, acknowledge it in one short \
 sentence.
-Be brief."""
+Be brief. Plain text only, no Markdown."""
 
 DONT_KNOW_MARK = "don't know based on"
 
-SOURCES_MARK = "Sources:"
-
-SOURCES = "\n\n" + SOURCES_MARK + " {titles}"
+SOURCES = "\n\nSources: {titles}"
 
 REFUSAL = (
     "Sorry, I can only help with HyperAI: questions about the platform and its documentation, "
@@ -118,6 +118,8 @@ SMALLTALK = (
     "other files in your workspace. Try: \"What is HyperAI?\" or \"Create a deployment YAML "
     "for a service using the nginx Docker image\"."
 )
+
+EMPTY_MESSAGE = "Please type a question about HyperAI, or tell me which file to create, edit or delete."
 
 CONFIRM_HINT = "(yes/no)"
 
@@ -231,4 +233,5 @@ PLAIN_FILE_USER = "File: {path}\nRequest: {text}"
 
 EXPLAIN_FILE_SYSTEM = """You are Hyperion, the assistant inside the HyperAI IDE. Explain the file \
 the user shows you in a few short sentences or bullet points: what application it describes and \
-its main settings (image, resources, ports). Use only what is in the file."""
+its main settings (image, resources, ports). Use only what is in the file. Plain text only: no \
+Markdown, no asterisks, no backticks; start list items with "- "."""

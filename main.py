@@ -43,6 +43,11 @@ class ChatRequest(BaseModel):
     text: str  # the text the user typed in the chat
 
 
+MAX_INPUT_CHARS = 4000  # the model has an 8k-token context
+# no caching or proxy buffering between us and the browser, or the stream arrives in one lump
+SSE_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+
+
 def sse(payload: dict) -> str:
     return f"data: {json.dumps(payload)}\n\n"
 
@@ -57,7 +62,7 @@ async def answer_question(text: str, session: Session, hits: rag.Hits) -> AsyncI
     )
     messages = [("system", prompts.ANSWER_SYSTEM), *session.history, ("user", question)]
     answer = ""
-    async for piece in without_sources_line(llm.chat_llm.astream(messages)):
+    async for piece in llm.stream_text(messages):
         answer += piece
         yield piece
     titles = rag.source_titles(hits) if context else []
@@ -68,32 +73,8 @@ async def answer_question(text: str, session: Session, hits: rag.Hits) -> AsyncI
 async def answer_from_conversation(text: str, session: Session) -> AsyncIterator[str]:
     """Stream an answer about the chat itself: no excerpts (they distract the model), no sources."""
     messages = [("system", prompts.ANSWER_CONVERSATION_SYSTEM), *session.history, ("user", text)]
-    async for piece in without_sources_line(llm.chat_llm.astream(messages)):
+    async for piece in llm.stream_text(messages):
         yield piece
-
-
-async def without_sources_line(chunks) -> AsyncIterator[str]:
-    """Pass the model's text through, dropping a "Sources:" line if it writes its own.
-
-    Holds back the last few characters so the marker is caught even when split across chunks.
-    """
-    mark = prompts.SOURCES_MARK
-    held = ""
-    async for chunk in chunks:
-        if not chunk.text:
-            continue
-        held += chunk.text
-        cut = held.find(mark)
-        if cut != -1:
-            if held[:cut].rstrip():
-                yield held[:cut].rstrip()
-            return
-        safe = len(held) - (len(mark) - 1)
-        if safe > 0:
-            yield held[:safe]
-            held = held[safe:]
-    if held.rstrip():
-        yield held.rstrip()
 
 
 async def retrieve_for(text: str, session: Session) -> tuple[float | None, rag.Hits]:
@@ -108,6 +89,11 @@ async def retrieve_for(text: str, session: Session) -> tuple[float | None, rag.H
 
 async def run_turn(text: str, session: Session) -> AsyncIterator[fileops.Event]:
     """Yield the text increments (str) and IDE actions (dict) of one reply. Python owns the control flow."""
+    if not text.strip():
+        yield prompts.EMPTY_MESSAGE
+        return
+    text = text.strip()[:MAX_INPUT_CHARS]
+
     # 1. a destructive action is waiting: this message is the answer to "(yes/no)"
     declined = False
     if session.pending_action:
@@ -177,7 +163,7 @@ async def generate_reply(request: ChatRequest) -> AsyncIterator[str]:
         yield sse({"response": prompts.LLM_ERROR})
     else:
         # the model imitates a "Sources:" line it sees in its own earlier answers
-        session.add_turn(request.text, "".join(reply).split(prompts.SOURCES_MARK)[0].rstrip())
+        session.add_turn(request.text, "".join(reply).split(llm.SOURCES_MARK)[0].rstrip())
     log.info("turn done user=%s latency=%.2fs actions=%s", request.user_id, time.perf_counter() - started, done)
     yield "data: [DONE]\n\n"
 
@@ -189,7 +175,7 @@ async def health() -> dict:
 
 @app.post("/chat")
 async def chat(request: ChatRequest):
-    return StreamingResponse(generate_reply(request), media_type="text/event-stream")
+    return StreamingResponse(generate_reply(request), media_type="text/event-stream", headers=SSE_HEADERS)
 
 
 if __name__ == "__main__":

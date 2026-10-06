@@ -104,7 +104,7 @@ def clean_params(data: dict, kind: str | None = None, image_hint: str | None = N
     has_image = bool(image) and params.workload_kind == "DockerImage"
     if not image and params.workload_kind == "DockerImage":
         label = "spec.workload.dockerImage.image" if params.kind == "device" else "specs.runtime.containerImage"
-        params.placeholders.append(f"`{label}` ({params.image})")
+        params.placeholders.append(f"{label} ({params.image})")
     params.name = slug(data.get("name"), slug(base, "my-app") if has_image else "my-app")
     params.description = str(data.get("description") or "").strip()[:200]
     params.owner = str(data.get("owner") or params.owner).strip()[:60]
@@ -130,12 +130,12 @@ def clean_params(data: dict, kind: str | None = None, image_hint: str | None = N
         if _URL.match(value):
             setattr(params, key, value)
         elif needed:
-            params.placeholders.append(f"`{label}` ({placeholder})")
+            params.placeholders.append(f"{label} ({placeholder})")
     package = str(data.get("package_name") or "").strip()
     if re.fullmatch(r"[A-Za-z][\w]*(\.[A-Za-z][\w]*)+", package):
         params.package_name = package
     elif params.workload_kind == "AndroidApk":
-        params.placeholders.append(f"`workload.androidApk.packageName` ({params.package_name})")
+        params.placeholders.append(f"workload.androidApk.packageName ({params.package_name})")
     chip = str(data.get("chip") or "").lower()
     params.chip = chip if chip in CHIPS else "esp32"
     params.device_name = str(data.get("device_name") or "").strip() or None
