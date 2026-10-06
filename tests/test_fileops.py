@@ -143,6 +143,31 @@ async def test_create_file_in_a_named_folder_and_with_an_explicit_path(workspace
     assert done[0]["path"] == "web/site.yaml"
 
 
+@pytest.mark.parametrize(
+    "text, path",
+    [
+        ("Compose the device manifest for the hello-world image under sensors", "sensors/hello-world.yaml"),
+        ("a redis profile, put it into the cache directory", "cache/redis.yaml"),
+        ("make an nginx profile inside web", "web/nginx.yaml"),
+        ("an nginx profile for the demo", "nginx.yaml"),
+        ("nginx profile on port 8080 to test it", "nginx.yaml"),
+        ("Create a deployment YAML for nginx in the current folder", "nginx.yaml"),
+        ("an nginx profile in the root directory", "nginx.yaml"),
+        ("put an nginx profile into the workspace", "nginx.yaml"),
+    ],
+)
+async def test_the_target_folder_is_read_from_the_wording_when_the_router_gives_no_path(workspace, text, path):
+    _, done = await run(workspace, Session(), text, intent="create_file")
+    assert [event["path"] for event in done] == [path]
+
+
+async def test_a_known_folder_is_recognised_after_a_plain_in(workspace):
+    session = Session()
+    session.remember_folder("stack")
+    _, done = await run(workspace, session, "add a grafana profile in stack", intent="create_file")
+    assert done[0]["path"] == "stack/grafana.yaml"
+
+
 async def test_same_name_in_another_folder_does_not_block_creation(workspace):
     workspace.files["demo/nginx.yaml"] = "other"
     _, done = await run(workspace, Session(), "nginx yaml please", intent="create_file", image="nginx")

@@ -63,6 +63,29 @@ def target_file(route: Route, text: str, session: Session) -> str:
     raise PathError("Which file do you mean? Give me its name or path.")
 
 
+_TARGET_FOLDER = re.compile(
+    r"\b(?:in|into|inside|under|to)\s+(?:the\s+|a\s+|my\s+|our\s+)?([\w./-]+)\s+(?:folder|directory|dir)\b"
+    r"|\b(?:into|inside|under|underneath)\s+(?:the\s+)?([\w./-]+)(?=\s*(?:$|[,.;!?]))",
+    re.IGNORECASE,
+)
+_NOT_A_FOLDER = frozenset(
+    "the it there this that same a an my our new target right current root workspace working project "
+    "main top parent home default existing".split()
+)
+
+
+def folder_from_text(text: str, session: Session) -> str | None:
+    """The folder a create request names in words, when the router gave no usable path."""
+    for match in _TARGET_FOLDER.finditer(text):
+        name = (match.group(1) or match.group(2)).strip("./")
+        if name and name.lower() not in _NOT_A_FOLDER and not actions.has_extension(name):
+            return f"{name}/"
+    for folder in sorted(session.folders, key=len, reverse=True):
+        if re.search(rf"\b(?:in|into|inside|under|to)\s+(?:the\s+)?{re.escape(folder)}\b", text, re.IGNORECASE):
+            return f"{folder}/"
+    return None
+
+
 def is_folder_reference(raw: str, text: str, session: Session) -> bool:
     """Whether a path without extension names a folder to put the file in (vs. a file name)."""
     if raw.endswith("/") or raw.strip("/") in session.folders:
@@ -151,7 +174,7 @@ async def delete_folder(route: Route, text: str, session: Session) -> AsyncItera
 
 
 async def create_file(route: Route, text: str, session: Session) -> AsyncIterator[Event]:
-    raw = grounded_path(route, text, session) or ""
+    raw = grounded_path(route, text, session) or folder_from_text(text, session) or ""
     if raw and actions.has_extension(raw) and not actions.is_yaml(raw):
         async for event in create_plain_file(actions.clean_path(raw), text, session):
             yield event

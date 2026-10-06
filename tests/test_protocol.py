@@ -150,7 +150,8 @@ def test_conversation_question_uses_history_only(monkeypatch, fake_llm, fake_sea
     assert text_of(post("What was my first question?")) == "Hello world"
 
     system, *history, latest = fake_llm.calls[1]
-    assert system == ("system", prompts.ANSWER_CONVERSATION_SYSTEM)
+    assert system == ("system", prompts.ANSWER_CONVERSATION_SYSTEM.format(facts=session.get_session("u1").facts()))
+    assert "Files created or worked on: none" in system[1]
     assert history == [("user", "What is HyperAI?"), ("assistant", "Hello world")]
     assert latest == ("user", "What was my first question?")
     assert len(fake_search["queries"]) == searches  # no retrieval, no excerpts, no sources

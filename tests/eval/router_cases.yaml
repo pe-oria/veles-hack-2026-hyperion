@@ -169,3 +169,16 @@
 - {id: m-remove-recreate, category: multi_step, split: test, text: "first remove nginx.yaml, then make a fresh one for nginx:1.27", expect: {intents: [delete_file, create_file]}}
 - {id: m-profile-question, category: multi_step, split: test, text: "write a mongo profile; also, what does D4.2 describe?", expect: {intents: [create_file, question]}}
 - {id: m-two-folders, category: multi_step, split: test, text: "make folders named dev and prod", expect: {intents: [create_folder, create_folder]}}
+
+# --- found by probing with fresh phrasings after Task B (seen once, so dev) -------------------------
+- {id: m-like-folder-file, category: multi_step, split: dev, text: "I'd like a directory called infra with a rabbitmq descriptor in it, 1Gi of RAM", expect: {intents: [create_folder, create_file]}}
+- id: m-same-for-two
+  category: multi_step
+  split: dev
+  history: &rabbit [["Create a rabbitmq descriptor with 1Gi of RAM in the infra folder", "Creating infra/rabbitmq.yaml - a native application profile for rabbitmq:latest."]]
+  text: "now do the same for memcached and influxdb"
+  expect: {intents: [create_file, create_file]}
+- {id: m-lower-then-validate, category: multi_step, split: dev, history: *rabbit, text: "lower rabbitmq's memory to 512Mi, then tell me whether the file still validates", expect: {intents: [edit_file, validate_file]}}
+- {id: m-wipe-then-explain, category: multi_step, split: dev, text: "wipe the infra directory, and afterwards explain what an Open Connector is", expect: {intents: [delete_folder, question]}}
+- {id: m-two-and-limerick, category: multi_step, split: dev, text: "could you whip up manifests for minio and keycloak, and write a limerick about kubernetes while you're at it", expect: {intents: [create_file, create_file, off_topic]}}
+- {id: e-three-settings, category: edit, split: dev, history: *nginx, text: "double its cpu, expose 8443 too and switch it to the testing phase", expect: {intent: edit_file}}

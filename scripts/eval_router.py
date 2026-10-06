@@ -11,6 +11,7 @@ docs/eval/router_<split>_<YYYYmmdd-HHMM>.md.
 import argparse
 import asyncio
 import logging
+import re
 import sys
 import time
 from collections import defaultdict
@@ -31,6 +32,7 @@ try:  # the multi-step planner arrives with Task B
 except ImportError:
     planner = None
 
+FILE_IN_REPLY = re.compile(r"[\w./-]+\.ya?ml")
 CASES_PATH = ROOT / "tests" / "eval" / "router_cases.yaml"
 REPORT_DIR = ROOT / "docs" / "eval"
 
@@ -80,6 +82,9 @@ async def predict(case: dict) -> list:
     session = Session()
     for user, assistant in case.get("history") or []:
         session.add_turn(user, assistant)
+        # the live service would remember the files those turns touched
+        for path in FILE_IN_REPLY.findall(assistant):
+            session.remember_file(path)
     text = case["text"]
     steps = [text]
     if planner is not None and planner.looks_multi(text):

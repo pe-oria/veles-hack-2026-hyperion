@@ -13,7 +13,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger("hyperion")
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
-from hyperion import confirm, fileops, guardrails, ide, llm, prompts, rag, router, yamlgen  # noqa: E402
+from hyperion import confirm, fileops, guardrails, ide, llm, planner, prompts, rag, router, yamlgen  # noqa: E402
 from hyperion.session import Session, get_session  # noqa: E402
 
 
@@ -74,7 +74,8 @@ async def answer_question(text: str, session: Session, hits: rag.Hits) -> AsyncI
 
 async def answer_from_conversation(text: str, session: Session) -> AsyncIterator[str]:
     """Stream an answer about the chat itself: no excerpts (they distract the model), no sources."""
-    messages = [("system", prompts.ANSWER_CONVERSATION_SYSTEM), *session.history, ("user", text)]
+    system = prompts.ANSWER_CONVERSATION_SYSTEM.format(facts=session.facts())
+    messages = [("system", system), *session.history, ("user", text)]
     async for piece in llm.stream_text(messages):
         yield piece
 
@@ -107,49 +108,8 @@ async def classify(text: str, session: Session) -> tuple[router.Route, float | N
     return route, similarity, hits
 
 
-async def run_turn(text: str, session: Session) -> AsyncIterator[fileops.Event]:
-    """Yield the text increments (str) and IDE actions (dict) of one reply. Python owns the control flow."""
-    if not text.strip():
-        yield prompts.EMPTY_MESSAGE
-        return
-    text = text.strip()[:MAX_INPUT_CHARS]
-
-    # 1. a destructive action is waiting: this message is the answer to "(yes/no)"
-    declined = False
-    if session.pending_action:
-        pending, session.pending_action = session.pending_action, None
-        decision = confirm.classify(text)
-        log.info("intent=confirmation decision=%s pending=%s", decision, pending.action["action"])
-        if decision == "yes":
-            async for event in fileops.execute_pending(pending, session):
-                yield event
-            return
-        if decision == "no":
-            yield prompts.CANCELLED
-            return
-        yield prompts.NOT_CONFIRMED.format(question=pending.question)
-        declined = True
-    elif confirm.is_bare_answer(text):
-        # a bare "yes"/"no" with nothing to confirm: the model would just repeat its last answer
-        log.info("intent=confirmation decision=%s pending=None", confirm.classify(text))
-        yield prompts.NOTHING_PENDING
-        return
-
-    # 2. we asked which container image to use: a short answer completes that create
-    if session.pending_create:
-        waiting, session.pending_create = session.pending_create, None
-        image = yamlgen.image_from_reply(text)
-        if image:
-            log.info("intent=create_file (resumed) image=%s", image)
-            async for event in fileops.resume_create(waiting, image, session):
-                yield event
-            return
-        if yamlgen.wants_template(text):
-            log.info("intent=create_file (resumed) with a placeholder image")
-            async for event in fileops.handle(waiting.route, f"{waiting.text} ({text})", session):
-                yield event
-            return
-
+async def run_single(text: str, session: Session, declined: bool = False) -> AsyncIterator[fileops.Event]:
+    """One request: route -> guardrail -> dispatch. Yields text increments (str) and IDE actions (dict)."""
     route, similarity, hits = await classify(text, session)
     log.info(
         "intent=%s similarity=%s slots=%s",
@@ -173,6 +133,119 @@ async def run_turn(text: str, session: Session) -> AsyncIterator[fileops.Event]:
     else:
         async for event in fileops.handle(route, text, session):
             yield event
+
+
+def numbered(steps: list[tuple[int, str]]) -> str:
+    return "".join(f"\n{index}) {step}" for index, step in steps)
+
+
+def waiting_for_user(session: Session) -> bool:
+    return session.pending_action is not None or session.pending_create is not None
+
+
+async def run_steps(steps: list[tuple[int, str]], session: Session) -> AsyncIterator[fileops.Event]:
+    """Run plan steps in order. A step that needs an answer from the user pauses the rest."""
+    for position, (index, step) in enumerate(steps):
+        yield prompts.PLAN_STEP.format(index=index, total=session.plan_total, step=step)
+        try:
+            async for event in run_single(step, session):
+                yield event
+        except Exception as exc:
+            if llm.is_auth_error(exc):
+                raise  # a rejected key fails every step: report it once, as a configuration error
+            log.exception("plan step %d failed: %s", index, step)
+            yield prompts.PLAN_STEP_FAILED
+        remaining = steps[position + 1 :]
+        if waiting_for_user(session) and remaining:
+            session.pending_steps = remaining
+            yield prompts.PLAN_WAITING.format(items=numbered(remaining))
+            return
+
+
+def drop_plan(session: Session) -> str:
+    """Forget the queued steps; returns the note that lists what was not done ("" if none)."""
+    queued, session.pending_steps = session.pending_steps, []
+    return prompts.PLAN_DROPPED.format(items=numbered(queued)) if queued else ""
+
+
+async def resume_plan(session: Session) -> AsyncIterator[fileops.Event]:
+    queued, session.pending_steps = session.pending_steps, []
+    async for event in run_steps(queued, session):
+        yield event
+
+
+async def run_turn(text: str, session: Session) -> AsyncIterator[fileops.Event]:
+    """Yield the text increments (str) and IDE actions (dict) of one reply. Python owns the control flow."""
+    if not text.strip():
+        yield prompts.EMPTY_MESSAGE
+        return
+    text = text.strip()[:MAX_INPUT_CHARS]
+
+    # 1. a destructive action is waiting: this message is the answer to "(yes/no)"
+    declined = False
+    if session.pending_action:
+        pending, session.pending_action = session.pending_action, None
+        decision = confirm.classify(text)
+        log.info("intent=confirmation decision=%s pending=%s", decision, pending.action["action"])
+        if decision == "yes":
+            async for event in fileops.execute_pending(pending, session):
+                yield event
+            async for event in resume_plan(session):
+                yield event
+            return
+        if decision == "no":
+            yield prompts.CANCELLED + drop_plan(session)
+            return
+        dropped = drop_plan(session).lstrip("\n")
+        yield prompts.NOT_CONFIRMED.format(question=pending.question) + (f"{dropped}\n\n" if dropped else "")
+        declined = True
+    elif confirm.is_bare_answer(text):
+        # a bare "yes"/"no" with nothing to confirm: the model would just repeat its last answer
+        log.info("intent=confirmation decision=%s pending=None", confirm.classify(text))
+        yield prompts.NOTHING_PENDING
+        return
+
+    # 2. we asked which container image to use: a short answer completes that create
+    if session.pending_create:
+        waiting, session.pending_create = session.pending_create, None
+        image = yamlgen.image_from_reply(text)
+        template = None if image else yamlgen.wants_template(text)
+        if image or template:
+            log.info("intent=create_file (resumed) image=%s", image or "placeholder")
+            resumed = (
+                fileops.resume_create(waiting, image, session)
+                if image
+                else fileops.handle(waiting.route, f"{waiting.text} ({text})", session)
+            )
+            async for event in resumed:
+                yield event
+            async for event in resume_plan(session):
+                yield event
+            return
+        dropped = drop_plan(session)
+        if dropped:
+            yield dropped.lstrip("\n") + "\n\n"
+
+    # 3. several requests in one message: split them, then run each through the normal path
+    if planner.looks_multi(text):
+        steps = await planner.split(text, session)
+        if len(steps) == 1 and steps[0] != text:
+            log.info("request rewritten with its context: %s", steps[0])
+            text = steps[0]  # "do the same for busybox", spelled out
+            if planner.needs_splitting(text):
+                # spelled out, "likewise for nats" may itself be "a folder and a profile in it"
+                steps = await planner.split(text, session)
+        if len(steps) >= 2:
+            log.info("plan with %d steps: %s", len(steps), steps)
+            plan = list(enumerate(steps, 1))
+            session.plan_total = len(plan)
+            yield prompts.PLAN_INTRO.format(count=len(plan), items=numbered(plan))
+            async for event in run_steps(plan, session):
+                yield event
+            return
+
+    async for event in run_single(text, session, declined):
+        yield event
 
 
 async def generate_reply(request: ChatRequest) -> AsyncIterator[str]:

@@ -98,6 +98,9 @@ def test_ground_keeps_what_the_user_stated():
     # "7" must be stated as a number of its own, not found inside another one
     assert yamlgen.ground({"memory": "7Gi"}, "nginx on port 8070")["memory"] is None
     assert yamlgen.ground({"image": "postgres"}, "a database service")["image"] is None
+    # an organisation the model added is not the user's image
+    assert yamlgen.ground({"image": "minio/minio"}, "manifests for minio and keycloak")["image"] is None
+    assert yamlgen.ground({"image": "acme/api:2.1"}, "a profile for acme/api:2.1")["image"] == "acme/api:2.1"
 
 
 def test_stated_params_reads_fixed_format_values_from_the_text():
@@ -144,6 +147,8 @@ import pytest  # noqa: E402
         ("run the eclipse-mosquitto image on node rpi-7", "eclipse-mosquitto"),
         ("device app running the hello-world Docker image", "hello-world"),
         ("a nodejs api", "node"),
+        ("Create nginx.yaml", "nginx"),
+        ("make cache/redis.yml please", "redis"),
     ],
 )
 def test_guess_image_reads_explicit_and_well_known_names(text, image):
@@ -154,7 +159,7 @@ def test_guess_image_reads_explicit_and_well_known_names(text, image):
     "text",
     [
         "create a deployment yaml for my web service",
-        "put the profile in demo/redis.yaml",  # a path, and redis.yaml is a file name
+        "put the profile in demo/app.yaml",  # a path, not an image
         "the apk is at https://acme.io/cam.apk",
         "register it on node rpi-7",
         "What is a DeviceNode?",
@@ -210,3 +215,8 @@ def test_image_from_reply_accepts_short_answers(reply, image):
                                    "I do not know yet", ""])
 def test_image_from_reply_ignores_everything_else(reply):
     assert yamlgen.image_from_reply(reply) is None
+
+
+def test_an_invented_organisation_falls_back_to_the_name_the_user_gave():
+    params = yamlgen.build_params({"image": "jboss/keycloak"}, "Create a deployment YAML for keycloak", "native", "keycloak")
+    assert (params.image, params.file_stem, params.port) == ("keycloak", "keycloak", 8080)

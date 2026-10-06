@@ -387,6 +387,11 @@ def guess_image(text: str) -> tuple[str, bool] | None:
         _, _, image, version = min(known)
         return (f"{image}:{version}" if version else image), True
 
+    # "create redis.yaml": with nothing else to go on, the file is named after its image
+    for name in re.findall(r"(?<![\w-])([a-z][\w-]*)\.ya?ml\b", text, re.IGNORECASE):
+        if name.lower() in IMAGE_ALIASES:
+            return IMAGE_ALIASES[name.lower()], True
+
     loose = _LOOSE_IMAGE.search(text)
     if loose and loose.group(1).lower() not in _NOT_AN_IMAGE:
         return loose.group(1).lower(), False
@@ -436,7 +441,8 @@ def ground(data: dict, text: str) -> dict:
         kept["chip"] = None
     if kept.get("lifecycle_phase") and str(kept["lifecycle_phase"]).lower()[:4] not in lowered:
         kept["lifecycle_phase"] = None
-    image = split_image(kept.get("image"))[0].rsplit("/", 1)[-1].lower()
+    # the whole reference must be the user's: the model likes to add an organisation ("minio/minio")
+    image = split_image(kept.get("image"))[0].lower()
     if image and image not in lowered:
         kept["image"] = None
     return kept

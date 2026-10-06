@@ -92,6 +92,9 @@ Rules:
 - Answer ONLY from the documentation excerpts in the user's message and from the conversation so far.
 - If they do not contain the answer, reply exactly: "I don't know based on the HyperAI documentation."
 - Never use outside knowledge and never invent field names, components or numbers.
+- If the message also asks for something that is not about HyperAI (a song, a joke, a poem, a \
+story, a recipe, general knowledge), do NOT do it. Answer the HyperAI part only and add one \
+sentence saying you can only help with HyperAI.
 - Be concise: a short paragraph, or a short list when enumerating.
 - Plain text only: the chat cannot render Markdown. No asterisks, no backticks, no headings; start \
 list items with "- ".
@@ -108,7 +111,10 @@ message is about this conversation, not about the documentation.
 never said, say so.
 - If the user tells you something about themselves or their project, acknowledge it in one short \
 sentence.
-Be brief. Plain text only, no Markdown."""
+Be brief. Plain text only, no Markdown.
+
+Workspace facts for this session (trust these over your memory of the conversation):
+{facts}"""
 
 DONT_KNOW_MARK = "don't know based on"
 
@@ -257,3 +263,102 @@ EXPLAIN_FILE_SYSTEM = """You are Hyperion, the assistant inside the HyperAI IDE.
 the user shows you in a few short sentences or bullet points: what application it describes and \
 its main settings (image, resources, ports). Use only what is in the file. Plain text only: no \
 Markdown, no asterisks, no backticks; start list items with "- "."""
+
+
+# --- multi-step requests --------------------------------------------------------------------
+
+PLANNER_SYSTEM = """You split a message for Hyperion, the assistant of the HyperAI IDE, into steps. Reply \
+with ONE JSON object and nothing else: {"steps": ["...", "..."]}
+
+Rules:
+- One step per file, per folder, or per question. Steps are in the order they must happen.
+- Every step is a complete request that can be understood on its own: replace "it", "that", \
+"inside", "the second one" with the actual file or folder name.
+- Copy every detail the user gave (image, tag, port, cpu, memory, file name, folder) into the \
+step it belongs to. NEVER add a detail, number or file name the user did not give.
+- Several settings of the SAME file are ONE step. Saving a file "as" a name or "in" a folder is \
+part of the step that creates it.
+- A question, or several questions, about HyperAI with nothing else in the message is ONE step.
+- A part that has nothing to do with HyperAI (a joke, the weather) is its own step, unchanged.
+- "the same", "again", "likewise": repeat the Previous request with the new names, keeping its \
+settings and its folder.
+- At most 5 steps. If the message is a single request, return it as one step, unchanged."""
+
+PLANNER_USER = "{context}\nMessage: {text}"
+
+# (context, message, expected JSON)
+PLANNER_EXAMPLES: list[tuple[str, str, str]] = [
+    (
+        "Last file: none. Last folder: none.\nPrevious request: none",
+        "Create a folder demo and put an nginx deployment YAML in it",
+        '{"steps": ["Create a folder called demo", '
+        '"Create a deployment YAML for a service using the nginx Docker image in the demo folder"]}',
+    ),
+    (
+        "Last file: none. Last folder: none.\nPrevious request: none",
+        "make yamls for kafka and mysql",
+        '{"steps": ["Create a deployment YAML for kafka", "Create a deployment YAML for mysql"]}',
+    ),
+    (
+        "Last file: web.yaml. Last folder: none.\nPrevious request: none",
+        "bump the memory to 4Gi and the cpu to 2 cores",
+        '{"steps": ["bump the memory to 4Gi and the cpu to 2 cores"]}',
+    ),
+    (
+        "Last file: web.yaml. Last folder: none.\nPrevious request: none",
+        "check it and then delete it",
+        '{"steps": ["Validate web.yaml", "Delete web.yaml"]}',
+    ),
+    (
+        "Last file: none. Last folder: none.\nPrevious request: none",
+        "sing me a song, then create a folder called logs",
+        '{"steps": ["sing me a song", "Create a folder called logs"]}',
+    ),
+    (
+        "Last file: none. Last folder: none.\nPrevious request: none",
+        "Generate a profile for redis:7 with 512Mi of memory, owned by team A, and save it as cache/redis.yaml",
+        '{"steps": ["Generate a profile for redis:7 with 512Mi of memory, owned by team A, '
+        'and save it as cache/redis.yaml"]}',
+    ),
+    (
+        "Last file: none. Last folder: none.\nPrevious request: none",
+        "create api.yaml for the httpd image on port 8080, show it to me and tell me what a swarm is",
+        '{"steps": ["Create api.yaml for the httpd image on port 8080", "Show me api.yaml", "What is a swarm?"]}',
+    ),
+    (
+        "Last file: none. Last folder: none.\nPrevious request: none",
+        "What is HyperAI and how do I deploy an application?",
+        '{"steps": ["What is HyperAI and how do I deploy an application?"]}',
+    ),
+    (
+        "Last file: none. Last folder: apps.\nPrevious request: none",
+        "add a grafana profile and a prometheus one there",
+        '{"steps": ["Create an application profile for grafana in the apps folder", '
+        '"Create an application profile for prometheus in the apps folder"]}',
+    ),
+]
+
+PLANNER_EXAMPLES += [
+    (
+        "Last file: logs/kafka.yaml. Last folder: logs.\n"
+        "Previous request: Create a kafka descriptor with 2Gi of memory in the logs folder",
+        "same again for mysql and mariadb",
+        '{"steps": ["Create a mysql descriptor with 2Gi of memory in the logs folder", '
+        '"Create a mariadb descriptor with 2Gi of memory in the logs folder"]}',
+    ),
+    (
+        "Last file: api.yaml. Last folder: none.\nPrevious request: Create a device app for the hello-world image",
+        "do the same for busybox",
+        '{"steps": ["Create a device app for the busybox image"]}',
+    ),
+]
+
+PLAN_INTRO = "I'll do {count} things:{items}"
+
+PLAN_STEP = "\n\nStep {index}/{total} - {step}\n"
+
+PLAN_STEP_FAILED = "That step failed, so I skipped it."
+
+PLAN_WAITING = "\n\nStill to do once you answer:{items}"
+
+PLAN_DROPPED = "\n\nNot done:{items}"

@@ -68,9 +68,9 @@ def is_auth_error(exc: BaseException) -> bool:
     return isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code in (401, 403)
 
 
-async def ask_json(messages: list[tuple[str, str]]) -> dict:
+async def ask_json(messages: list[tuple[str, str]], max_tokens: int | None = None) -> dict:
     """Run a JSON-mode completion and return the parsed object ({} if unparsable)."""
-    reply = await json_llm.ainvoke(messages)
+    reply = await json_llm.ainvoke(messages, **({"max_completion_tokens": max_tokens} if max_tokens else {}))
     try:
         data = json.loads(reply.text)
     except json.JSONDecodeError:

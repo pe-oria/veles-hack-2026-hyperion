@@ -15,6 +15,9 @@ class Session:
     history: list[tuple[str, str]] = field(default_factory=list)  # (role, text)
     pending_action: "Pending | None" = None  # a destructive action awaiting the user's "yes"
     pending_create: object | None = None  # fileops.PendingCreate: a create waiting for an image name
+    # the rest of a multi-step plan, paused by a question to the user: (step number, text)
+    pending_steps: list[tuple[int, str]] = field(default_factory=list)
+    plan_total: int = 0
     last_file: str | None = None
     files: list[str] = field(default_factory=list)  # there is no "list files" endpoint: we keep track
     last_folder: str | None = None
@@ -49,6 +52,12 @@ class Session:
 
     def last_user_text(self) -> str | None:
         return next((text for role, text in reversed(self.history) if role == "user"), None)
+
+    def facts(self) -> str:
+        """What we know we did in the workspace, for answers about the conversation."""
+        files = ", ".join(self.files) or "none"
+        folders = ", ".join(self.folders) or "none"
+        return f"- Files created or worked on: {files}\n- Folders created: {folders}"
 
     def transcript(self, max_chars: int = 300) -> str:
         """Compact text form of the history, for the router prompt."""
