@@ -94,3 +94,26 @@ def test_correct_applies_the_default_app_kind():
     assert guardrails.correct(Route(intent="create_file"), "run mosquitto on an edge device", session).app_kind == "device"
     stated = Route(intent="create_file", app_kind="device")
     assert guardrails.correct(stated, "a profile for redis", session).app_kind == "device"
+
+
+def test_correct_turns_a_read_of_a_nonexistent_descriptor_into_a_create():
+    session = Session()
+    read = Route(intent="read_file", app_kind="device")
+    for text in ("descriptor for an Android APK com.acme.cam from https://acme.io/cam.apk",
+                 "I want the manifest for our vibration sensor",
+                 "give me a profile for kafka"):
+        fixed = guardrails.correct(read, text, session)
+        assert fixed.intent == "create_file", text
+    invented = guardrails.correct(Route(intent="read_file", path="sensor_thing"), "need a yaml for the sensor thing", session)
+    assert (invented.intent, invented.path) == ("create_file", None)
+
+
+def test_correct_keeps_real_reads():
+    session = Session()
+    session.remember_file("demo/redis.yaml")
+    read = Route(intent="read_file")
+    for text in ("open cam.yaml and print it", "show me the manifest", "explain what demo/redis.yaml does",
+                 "what is in the profile for redis?", "print the file", "I need to see the descriptor for nginx.yaml"):
+        assert guardrails.correct(read, text, session).intent == "read_file", text
+    known = Route(intent="read_file", path="redis.yaml")
+    assert guardrails.correct(known, "I want the redis profile", session).intent == "read_file"

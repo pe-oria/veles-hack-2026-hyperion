@@ -46,8 +46,26 @@ def apply(
 _DEVICE_WORDS = re.compile(r"\b(device|edge|android|apk|esp[\s-]?32\w*|firmware|microcontroller)\b", re.IGNORECASE)
 
 
+_FILE_NAME = re.compile(r"[\w./-]+\.(ya?ml|json|md|txt|toml|py|sh|conf|cfg|ini|xml|env)\b", re.IGNORECASE)
+_READ_VERB = re.compile(r"\b(show|open|print|display|read|view|cat|explain|describe|summari[sz]e|contents?|look at|what(?:'s| is) in)\b", re.IGNORECASE)
+_DESCRIPTOR = re.compile(r"\b(descriptors?|profiles?|manifests?|ya?ml|deployment)\b", re.IGNORECASE)
+_CREATE_CUE = re.compile(r"\b(for|need|want|give me|write|generate|make|create|new|draft|prepare|set up)\b", re.IGNORECASE)
+
+
+def asks_for_a_new_descriptor(route: Route, text: str, session: Session) -> bool:
+    """A read_file verdict for a file that cannot exist: "I need a descriptor for X"."""
+    if _FILE_NAME.search(text) or _READ_VERB.search(text):
+        return False  # a file is named, or the wording really is about looking at one
+    known = {item.rsplit("/", 1)[-1] for item in session.files}
+    if route.path and (route.path in session.files or route.path.rsplit("/", 1)[-1] in known):
+        return False
+    return bool(_DESCRIPTOR.search(text) and _CREATE_CUE.search(text))
+
+
 def correct(route: Route, text: str, session: Session) -> Route:
     """Deterministic repairs of the router's verdict, applied before anything acts on it."""
+    if route.intent == "read_file" and asks_for_a_new_descriptor(route, text, session):
+        route = route.model_copy(update={"intent": "create_file", "path": None})
     if route.intent == "create_file":
         updates: dict = {}
         if not route.image:

@@ -18,7 +18,8 @@ tells you a fact about themselves or their HyperAI project
 - "create_folder": create a folder/directory
 - "delete_folder": delete/remove a folder/directory
 - "validate_file": validate/check a file
-- "read_file": show/open/print/explain the contents of a file
+- "read_file": show/open/print/explain the contents of a file that already exists. Needing or \
+wanting a descriptor, profile or manifest "for" something is "create_file", never "read_file"
 - "smalltalk": greetings, thanks, "who are you", "what can you do"
 - "off_topic": anything unrelated to HyperAI or the IDE (weather, sports, poems, jokes, recipes, \
 news, maths, general trivia or general programming help)
@@ -63,6 +64,11 @@ ROUTER_EXAMPLES: list[tuple[str, str, dict]] = [
          "description": "Android camera app"},
     ),
     ("(none)", "is nginx.yaml valid?", {"intent": "validate_file", "path": "nginx.yaml"}),
+    (
+        "(none)",
+        "we have a LoRa gateway box at the edge, can I get the manifest for it",
+        {"intent": "create_file", "app_kind": "device", "description": "LoRa gateway device app"},
+    ),
     ("(none)", "Write me a poem about pizza", {"intent": "off_topic"}),
     (_ORBIT, "and who develops them?", {"intent": "question"}),
     (_ORBIT, "What did I say my app was called?", {"intent": "question", "about_conversation": True}),
