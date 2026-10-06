@@ -26,14 +26,20 @@ if not API_KEY:
     log.warning("API_KEY is not set - the service starts, but every chat will answer with a configuration error")
 # the client refuses to be built with an empty key
 _KEY = API_KEY or "missing"
-TIMEOUT = 90  # seconds; the shared server queues requests under load
+# The shared server occasionally leaves a request hanging. A stuck call must fail fast and be
+# retried once, never hold a turn for minutes: per-request timeouts, plus a hard deadline per call.
+TIMEOUT = 30  # seconds per HTTP request
+RETRIES = 1
+JSON_DEADLINE = 45  # router, parameters, planner: answers take well under a second
+REWRITE_DEADLINE = 90  # whole-file edits
+CHUNK_DEADLINE = 45  # longest silence tolerated while streaming an answer
 
 chat_llm = ChatOpenAI(
     model=MODEL,
     base_url=BASE_URL,
     api_key=_KEY,
     timeout=TIMEOUT,
-    max_retries=2,
+    max_retries=RETRIES,
     temperature=0.2,
     max_completion_tokens=1024,
 )
@@ -44,7 +50,7 @@ edit_llm = ChatOpenAI(
     base_url=BASE_URL,
     api_key=_KEY,
     timeout=TIMEOUT,
-    max_retries=2,
+    max_retries=RETRIES,
     temperature=0,
     max_completion_tokens=1500,
 )
@@ -54,7 +60,7 @@ json_llm = ChatOpenAI(
     base_url=BASE_URL,
     api_key=_KEY,
     timeout=TIMEOUT,
-    max_retries=2,
+    max_retries=RETRIES,
     temperature=0,
     max_completion_tokens=200,
     model_kwargs={"response_format": {"type": "json_object"}},
@@ -70,7 +76,9 @@ def is_auth_error(exc: BaseException) -> bool:
 
 async def ask_json(messages: list[tuple[str, str]], max_tokens: int | None = None) -> dict:
     """Run a JSON-mode completion and return the parsed object ({} if unparsable)."""
-    reply = await json_llm.ainvoke(messages, **({"max_completion_tokens": max_tokens} if max_tokens else {}))
+    extra = {"max_completion_tokens": max_tokens} if max_tokens else {}
+    async with asyncio.timeout(JSON_DEADLINE):
+        reply = await json_llm.ainvoke(messages, **extra)
     try:
         data = json.loads(reply.text)
     except json.JSONDecodeError:
@@ -130,7 +138,13 @@ async def stream_text(messages: list[tuple[str, str]]) -> AsyncIterator[str]:
     A few characters are held back so markup split across chunks is still caught.
     """
     held = ""
-    async for chunk in chat_llm.astream(messages):
+    chunks = chat_llm.astream(messages).__aiter__()
+    while True:
+        try:
+            async with asyncio.timeout(CHUNK_DEADLINE):
+                chunk = await chunks.__anext__()
+        except StopAsyncIteration:
+            break
         if not chunk.text:
             continue
         held = plain(held + chunk.text)
@@ -144,3 +158,10 @@ async def stream_text(messages: list[tuple[str, str]]) -> AsyncIterator[str]:
             held = held[-_HOLD:]
     if held.rstrip():
         yield held.rstrip()
+
+
+async def rewrite(messages: list[tuple[str, str]]) -> str:
+    """A whole-file completion from the edit model, under a hard deadline."""
+    async with asyncio.timeout(REWRITE_DEADLINE):
+        reply = await edit_llm.ainvoke(messages)
+    return reply.text

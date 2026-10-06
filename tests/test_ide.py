@@ -82,3 +82,53 @@ def test_default_gateway_parses_the_route_table(tmp_path, monkeypatch):
                         if path == "/proc/net/route" else real_open(path, *a, **k))
     (tmp_path / "route").write_text(table)
     assert ide.default_gateway() == "172.17.0.1"
+
+
+@pytest.mark.parametrize(
+    "status, body, headers, expected",
+    [
+        (400, '{"error": "Unsupported file type: .py"}', {"content-type": "application/json"}, "HTTP 400: Unsupported file type: .py"),
+        (415, '{"error": "only YAML can be validated"}', {"content-type": "application/json"}, "HTTP 415: only YAML can be validated"),
+        (422, "{}", {"content-type": "application/json"}, "HTTP 422: {}"),
+        (500, "<html><body>Internal Server Error</body></html>", {"content-type": "text/html"}, "HTTP 500: <html>"),
+        (502, "", {}, "HTTP 502"),
+    ],
+)
+async def test_any_error_status_from_validation_becomes_a_clear_message(monkeypatch, status, body, headers, expected):
+    """The mentor: validating a Python script returns an error code. Nothing may crash."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status, text=body, headers=headers)
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(helpers.httpx, "AsyncClient", lambda **kw: real_client(transport=httpx.MockTransport(handler)))
+    with pytest.raises(helpers.ValidateFileError) as raw:
+        await helpers.validate_file("hello.py")
+    assert str(raw.value).startswith(expected)
+
+    with pytest.raises(IdeError) as error:
+        await ide.validate("hello.py")
+    message = str(error.value)
+    assert message.startswith("The IDE could not validate hello.py: HTTP ")
+    assert message.endswith("Only HyperAI application descriptors (native or device YAML) can be validated.")
+
+
+async def test_validation_report_that_is_not_json_does_not_crash(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="OK", headers={"content-type": "text/plain"})
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(helpers.httpx, "AsyncClient", lambda **kw: real_client(transport=httpx.MockTransport(handler)))
+    with pytest.raises(IdeError) as error:
+        await ide.validate("hello.py")
+    assert "could not validate hello.py" in str(error.value)
+
+
+async def test_missing_file_on_validation_keeps_the_not_found_message(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"error": "File not found"})
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(helpers.httpx, "AsyncClient", lambda **kw: real_client(transport=httpx.MockTransport(handler)))
+    with pytest.raises(IdeError) as error:
+        await ide.validate("ghost.yaml")
+    assert (error.value.kind, str(error.value)) == ("not_found", "I could not find ghost.yaml in the workspace.")

@@ -341,6 +341,33 @@ async def test_folders(workspace):
     assert done == [] and "Which folder" in reply
 
 
+async def test_non_descriptor_files_are_not_written_or_edited(workspace):
+    workspace.files["notes.txt"] = "hello"
+    # even if the router and the guardrail let it through, the handlers refuse
+    reply, done = await run(workspace, Session(), "create hello.py that prints hi", intent="create_file", path="hello.py")
+    assert done == [] and reply == prompts.REFUSAL
+    reply, done = await run(workspace, Session(), "add a line to notes.txt", intent="edit_file", path="notes.txt")
+    assert done == [] and reply == prompts.NOT_A_DESCRIPTOR.format(path="notes.txt")
+    assert workspace.files["notes.txt"] == "hello"
+    # showing and deleting it stay possible
+    reply, _ = await run(workspace, Session(), "show me notes.txt", intent="read_file", path="notes.txt")
+    assert reply == "notes.txt:\n\nhello"
+    session = Session()
+    reply, done = await run(workspace, session, "delete notes.txt", intent="delete_file", path="notes.txt")
+    assert reply == "Delete notes.txt? (yes/no)" and session.pending_action is not None
+
+
+async def test_validating_a_file_the_backend_does_not_recognise(workspace):
+    workspace.files["hello.py"] = "print('hi')"
+    unrecognised = {"type": None, "valid": False,
+                    "errors": [{"line": 1, "field": "", "message": "unrecognised profile, expected applicationProfile"}]}
+    workspace.reports = [unrecognised]
+    reply, done = await run(workspace, Session(), "validate hello.py", intent="validate_file", path="hello.py")
+    assert done == []
+    assert reply == ("The IDE could not validate hello.py: unrecognised profile, expected applicationProfile. "
+                     "Only HyperAI application descriptors (native or device YAML) can be validated.")
+
+
 async def test_validate_and_read(workspace):
     workspace.files["nginx.yaml"] = NGINX
     session = Session()

@@ -58,7 +58,8 @@ def test_guardrail_overrides_off_topic_for_domain_terms():
 
 def test_guardrail_similarity_thresholds():
     off, question = Route(intent="off_topic"), Route(intent="question")
-    assert guardrails.apply(off, "How are edge gadgets registered?", similarity=0.75).intent == "question"
+    assert guardrails.apply(off, "How are edge gadgets registered?", similarity=0.72).intent == "question"
+    assert guardrails.apply(off, "How are edge gadgets registered?", similarity=0.68).intent == "off_topic"
     assert guardrails.apply(off, "Tell me a joke", similarity=0.49).intent == "off_topic"
     assert guardrails.apply(question, "How do I cook lasagna?", similarity=0.5).intent == "off_topic"
     # a far-away question is allowed when it is about the conversation, or names the domain
@@ -136,9 +137,7 @@ def test_correct_keeps_technical_file_requests():
     session = Session()
     cases = [
         (Route(intent="create_file"), "Create a deployment YAML for a service using the nginx Docker image"),
-        (Route(intent="create_file", path="notes.md"), "create a notes.md file with a checklist for deploying to HyperAI"),
         (Route(intent="edit_file"), "Change the memory to 2Gi"),
-        (Route(intent="create_file", path="hello.py"), "create hello.py that prints hello"),
         (Route(intent="edit_file", path="app.yaml"), "set the description to 'user stories service'"),
         (Route(intent="create_file"), "create a profile for our speech recognition app using the whisper image"),
         (Route(intent="create_file"), "make a yaml from the cookbook recipe for nginx"),
@@ -149,13 +148,87 @@ def test_correct_keeps_technical_file_requests():
     assert guardrails.correct(Route(intent="delete_file", path="poem.txt"), "delete poem.txt", session).intent == "delete_file"
 
 
-def test_generic_files_can_be_switched_off(monkeypatch):
+def test_only_descriptors_are_written():
+    """The mentor's scope: no scripts, source code or documents - only YAML descriptors and folders."""
+    session = Session()
+    assert guardrails.ALLOW_GENERIC_FILES is False
+    refused = [
+        (Route(intent="create_file", path="hello.py"), "create hello.py that prints hello world"),
+        (Route(intent="create_file"), "write a bash script that lists the files"),
+        (Route(intent="create_file"), "add a README about cooking"),
+        (Route(intent="edit_file", path="utils.js"), "put a function in utils.js"),
+        (Route(intent="create_file", path="notes.md"), "create a notes.md file with a checklist"),
+        (Route(intent="edit_file", path="notes.txt"), "append a line to notes.txt"),
+        (Route(intent="create_file"), "make a python program for me"),
+        (Route(intent="create_file", path="Main.java"), "generate Main.java with a main method"),
+    ]
+    for route, text in refused:
+        assert guardrails.correct(route, text, session).intent == "off_topic", text
+    allowed = [
+        (Route(intent="create_file", path="demo/nginx.yaml"), "create demo/nginx.yaml for nginx"),
+        (Route(intent="create_file"), "Create a deployment YAML for a service using the nginx Docker image"),
+        (Route(intent="create_file"), "a HyperAI device descriptor for a python inference app"),
+        (Route(intent="edit_file", path="app.yml"), "change the memory in app.yml to 2Gi"),
+        (Route(intent="create_folder", path="scripts"), "create a folder called scripts"),
+        # looking at, validating and deleting existing files are IDE operations
+        (Route(intent="read_file", path="hello.py"), "show me hello.py"),
+        (Route(intent="validate_file", path="hello.py"), "validate hello.py"),
+        (Route(intent="delete_file", path="notes.txt"), "delete notes.txt"),
+    ]
+    for route, text in allowed:
+        assert guardrails.correct(route, text, session).intent == route.intent, text
+
+
+def test_generic_files_can_be_switched_back_on(monkeypatch):
+    monkeypatch.setattr(guardrails, "ALLOW_GENERIC_FILES", True)
     session = Session()
     generic = Route(intent="create_file", path="hello.py")
-    monkeypatch.setattr(guardrails, "ALLOW_GENERIC_FILES", False)
-    assert guardrails.correct(generic, "create hello.py that prints hello", session).intent == "off_topic"
-    descriptor = Route(intent="create_file", path="demo/nginx.yaml")
-    assert guardrails.correct(descriptor, "create demo/nginx.yaml for nginx", session).intent == "create_file"
+    assert guardrails.correct(generic, "create hello.py that prints hello", session).intent == "create_file"
+    poem = Route(intent="create_file", path="poem.txt")
+    assert guardrails.correct(poem, "create poem.txt with a poem about cats", session).intent == "off_topic"
+
+
+GENERAL = ["What is Kubernetes?", "What is Docker?", "explain REST APIs", "what is YAML?", "how does TLS work?",
+           "what is edge computing in general?", "Can you explain machine learning?", "what are containers",
+           "Tell me about Linux.", "define microservices"]
+ABOUT_HYPERAI = ["How does HyperAI use Kubernetes?", "What does the HyperAI DSL use YAML for?",
+                 "Which fields does a native application profile need?", "What is a DeviceNode?",
+                 "what is the role of docker in a device application?", "What is a swarm?",
+                 "Explain the Open Connectors architecture", "What does D4.2 say about Android devices?"]
+
+
+def test_general_technology_questions_are_off_topic_whatever_the_router_and_the_scores_say():
+    for text in GENERAL:
+        assert guardrails.is_general_question(text), text
+        assert guardrails.apply(Route(intent="question"), text, similarity=0.9).intent == "off_topic", text
+        assert guardrails.apply(Route(intent="off_topic"), text, similarity=0.9).intent == "off_topic", text
+
+
+def test_questions_that_tie_technology_to_hyperai_are_answered():
+    for text in ABOUT_HYPERAI:
+        assert not guardrails.is_general_question(text), text
+        assert guardrails.apply(Route(intent="question"), text, similarity=0.6).intent == "question", text
+        assert guardrails.apply(Route(intent="off_topic"), text, similarity=0.6).intent == "question", text
+
+
+def test_a_question_naming_nothing_hyperai_must_be_close_to_the_documentation():
+    question = Route(intent="question")
+    text = "How do I deploy my first web server?"
+    assert guardrails.apply(question, text, similarity=0.76).intent == "question"
+    assert guardrails.apply(question, text, similarity=0.66).intent == "off_topic"
+    # a follow-up is judged together with what it follows
+    assert guardrails.apply(question, "who manages them?", similarity=0.58, follow_up_similarity=0.82).intent == "question"
+    # retrieval down: trust the router
+    assert guardrails.apply(question, text, similarity=None).intent == "question"
+
+
+def test_generic_words_no_longer_rescue_an_off_topic_verdict_on_their_own():
+    off = Route(intent="off_topic")
+    for text in ("what is yaml good for?", "is the ide any good?", "tell me about the continuum of care", "my workspace is messy"):
+        assert guardrails.apply(off, text, similarity=0.6).intent == "off_topic", text
+    # ... but next to a file or an IDE action they do
+    assert guardrails.apply(off, "why does nginx.yaml fail?", similarity=0.6).intent == "question"
+    assert guardrails.apply(off, "how do I create a yaml profile here?", similarity=0.6).intent == "question"
 
 
 def test_prompt_injection_is_refused_whatever_the_router_thought():
@@ -181,3 +254,21 @@ def test_ordinary_messages_are_not_mistaken_for_injection():
                  "which instructions do I follow to deploy?", "is the ignore list configurable?", "What are Open Connectors like?"):
         assert not guardrails.is_injection(text), text
         assert guardrails.correct(Route(intent="question"), text, session).intent == "question"
+
+
+def test_a_question_about_a_named_file_is_a_read():
+    session = Session()
+    for intent in ("question", "off_topic"):
+        fixed = guardrails.correct(Route(intent=intent), "explain what demo/redis.yaml does", session)
+        assert (fixed.intent, fixed.path) == ("read_file", "demo/redis.yaml")
+    # no file named, or no reading verb: left alone
+    assert guardrails.correct(Route(intent="question"), "explain what a DeviceNode does", session).intent == "question"
+    assert guardrails.correct(Route(intent="question"), "why would nginx.yaml be rejected by a cluster?", session).intent == "question"
+
+
+def test_deleting_everything_in_a_place_is_a_folder_delete():
+    session = Session()
+    for text in ("remove everything in demo", "delete all files in the cache", "wipe the whole of staging", "delete the logs directory"):
+        assert guardrails.correct(Route(intent="delete_file", path="x"), text, session).intent == "delete_folder", text
+    for text in ("remove nginx.yaml", "Delete it", "delete everything in notes.txt"):
+        assert guardrails.correct(Route(intent="delete_file"), text, session).intent == "delete_file", text

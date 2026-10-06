@@ -340,5 +340,32 @@ def test_any_other_message_drops_the_waiting_create(monkeypatch, fake_llm):
     assert session.get_session("u1").pending_create is None
 
 
+def test_a_model_call_that_never_returns_fails_the_turn_instead_of_hanging_the_service(monkeypatch):
+    import asyncio
+
+    class Stuck:
+        async def ainvoke(self, messages, **kwargs):
+            await asyncio.sleep(3600)
+
+    monkeypatch.setattr(llm, "json_llm", Stuck())
+    monkeypatch.setattr(llm, "JSON_DEADLINE", 0.05)
+    assert post("What is HyperAI?") == [prompts.LLM_ERROR]
+    assert client.get("/health").status_code == 200
+
+
+def test_a_stream_that_goes_silent_is_cut_off(monkeypatch):
+    import asyncio
+
+    class GoesSilent:
+        async def astream(self, messages):
+            yield FakeChunk("The connectors manage edge devices")
+            await asyncio.sleep(3600)
+
+    monkeypatch.setattr(llm, "chat_llm", GoesSilent())
+    monkeypatch.setattr(llm, "CHUNK_DEADLINE", 0.05)
+    set_route(monkeypatch, intent="question")
+    assert text_of(post("What are Open Connectors?")).endswith(prompts.LLM_ERROR)
+
+
 def test_chat_rejects_malformed_body():
     assert client.post("/chat", json={"text": "hi"}).status_code == 422

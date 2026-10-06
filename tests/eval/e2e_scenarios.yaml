@@ -219,3 +219,54 @@
       expect: {actions: [], contains: ["(yes/no)"]}
     - text: "yes"
       expect: {actions: ["delete_file nginx.yaml", "create_file redis.yaml"], valid: true}
+
+# --- Task C: scope per the mentor --------------------------------------------------------------------
+- id: scope-generic-files
+  category: scope
+  setup:
+    files:
+      notes.txt: "remember to water the plants\n"
+  turns:
+    - text: "create hello.py that prints hello world"
+      expect: {actions: [], refused: true}
+    - text: "write a bash script that prints the date"
+      expect: {actions: [], refused: true}
+    - text: "add a README about cooking"
+      expect: {actions: [], refused: true}
+    - text: "add a line to notes.txt saying buy milk"
+      expect: {actions: []}
+    - text: "show me notes.txt"
+      expect: {actions: [], contains: ["water the plants"]}
+    - text: "Create a folder called tools"
+      expect: {actions: ["create_folder tools"]}
+    - text: "Create a deployment YAML for a service using the nginx Docker image"
+      expect: {actions: ["create_file nginx.yaml"], valid: true}
+
+- id: scope-validate-script
+  category: scope
+  setup:
+    files:
+      hello.py: "print('hello world')\n"
+  turns:
+    - text: "validate hello.py"
+      expect: {actions: [], contains: ["could not validate hello.py", "Only HyperAI application descriptors"]}
+    - text: "fix hello.py"
+      expect: {actions: []}
+    - text: "delete hello.py"
+      expect: {actions: [], contains: ["(yes/no)"]}
+    - text: "yes"
+      expect: {actions: ["delete_file hello.py"]}
+
+- id: scope-general-questions
+  category: scope
+  turns:
+    - text: "What is Kubernetes?"
+      expect: {actions: [], refused: true}
+    - text: "What is Docker?"
+      expect: {actions: [], refused: true}
+    - text: "explain REST APIs"
+      expect: {actions: [], refused: true}
+    - text: "How does HyperAI use Kubernetes?"
+      expect: {actions: [], contains: ["Sources:"]}
+    - text: "What is a DeviceNode?"
+      expect: {actions: [], contains: ["Sources:"]}

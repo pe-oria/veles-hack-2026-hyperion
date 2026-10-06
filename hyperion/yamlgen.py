@@ -515,8 +515,7 @@ async def extract_params(text: str, kind: str | None, image_hint: str | None) ->
 
 
 async def _rewrite(system: str, user: str) -> str:
-    reply = await llm.edit_llm.ainvoke([("system", system), ("human", user)])
-    return strip_fences(reply.text)
+    return strip_fences(await llm.rewrite([("system", system), ("human", user)]))
 
 
 def rules_for(kind: str | None) -> str:
@@ -538,7 +537,5 @@ async def repair(content: str, errors: list[dict]) -> str:
 
 async def write_plain(path: str, text: str) -> str:
     """Content for a file that is not an application descriptor (README, notes, ...)."""
-    reply = await llm.edit_llm.ainvoke(
-        [("system", prompts.PLAIN_FILE_SYSTEM), ("human", prompts.PLAIN_FILE_USER.format(path=path, text=text))]
-    )
-    return strip_fences(reply.text)
+    messages = [("system", prompts.PLAIN_FILE_SYSTEM), ("human", prompts.PLAIN_FILE_USER.format(path=path, text=text))]
+    return strip_fences(await llm.rewrite(messages))

@@ -11,6 +11,7 @@ import httpx
 
 import helpers
 from helpers import ValidateFileError, validate_file
+from hyperion import prompts
 
 log = logging.getLogger("hyperion")
 
@@ -117,12 +118,12 @@ async def read(path: str) -> File:
     if response.status_code == 404:
         raise IdeError("not_found", f"I could not find {path} in the workspace.")
     if response.status_code == 409:
-        matches = response.json().get("matches", [])
+        matches = helpers._json(response).get("matches", [])
         listed = ", ".join(f"{match}" for match in matches)
         raise IdeError("ambiguous", f"Several files are named {path}: {listed}. Which one do you mean?", matches)
     if response.status_code != 200:
         raise IdeError("error", f"The IDE could not read {path}.")
-    body = response.json()
+    body = helpers._json(response)
     return File(path=body.get("path", path), content=body.get("content", ""))
 
 
@@ -152,10 +153,19 @@ async def wait_for_content(path: str, content: str, timeout: float | None = None
 
 
 async def validate(path: str) -> dict:
-    """The backend's validation report: {path, type, valid, errors[], warnings[]}."""
+    """The backend's validation report: {path, type, valid, errors[], warnings[]}.
+
+    The backend decides what can be validated; a file it refuses (a script, a binary) comes back
+    as an IdeError whose message carries the backend's own reason.
+    """
     try:
         return await validate_file(path)
     except ValidateFileError as exc:
-        if "cannot reach" in str(exc):
+        reason = str(exc)
+        if "cannot reach" in reason:
             raise IdeError("unreachable", UNREACHABLE) from exc
-        raise IdeError("error", f"I could not validate {path}: {exc}.") from exc
+        if "is not in the workspace" in reason:
+            raise IdeError("not_found", f"I could not find {path} in the workspace.") from exc
+        if "several files are named" in reason:
+            raise IdeError("ambiguous", f"I cannot tell which {path} you mean: {reason}.") from exc
+        raise IdeError("error", prompts.CANNOT_VALIDATE.format(path=path, reason=reason)) from exc

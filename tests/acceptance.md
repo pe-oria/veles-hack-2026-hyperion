@@ -23,3 +23,11 @@ Run these in the IDE (or with curl) before every push.
 - "now do the same for memcached and influxdb" (after a create) → repeats it with the same settings and folder
 - "Create an nginx deployment with cpu 500m and memory 1Gi" → ONE file (two settings are not two requests)
 - "create a deployment yaml for my web service" → asks which image → "postgres:16" → `create_file postgres.yaml`
+
+## Scope (mentor, 6 Oct): only HyperAI and its descriptors
+
+- "create hello.py that prints hello world" / "write a bash script" / "add a README about cooking" → refusal, no action
+- "add a line to notes.txt" (existing non-YAML file) → refused; "show me notes.txt" and "delete notes.txt" still work
+- "validate hello.py" → "The IDE could not validate hello.py: … Only HyperAI application descriptors (native or device YAML) can be validated."
+- "What is Kubernetes?" / "What is Docker?" / "explain REST APIs" / "what is YAML?" → refusal
+- "How does HyperAI use Kubernetes?" / "What does the HyperAI DSL use YAML for?" → grounded answers

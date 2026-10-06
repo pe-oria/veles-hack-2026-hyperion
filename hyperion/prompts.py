@@ -22,8 +22,12 @@ tells you a fact about themselves or their HyperAI project
 wanting a descriptor, profile or manifest "for" something is "create_file", never "read_file"
 - "smalltalk": greetings, thanks, "who are you", "what can you do"
 - "off_topic": anything unrelated to HyperAI or the IDE (weather, sports, poems, jokes, recipes, \
-news, maths, general trivia or general programming help). A request to put such content into a \
-file (a poem, story, recipe, joke, essay or letter) is still "off_topic"
+news, maths, general trivia or general programming help). General technology questions that are \
+not about HyperAI ("What is Kubernetes?", "explain REST APIs") are "off_topic" too. But a question \
+about doing something on the platform or in the IDE (deploying an app, workflows, devices, \
+application profiles, tutorial steps) is a "question" even when it does not say "HyperAI". A \
+request to write anything other than a HyperAI descriptor: a script, source code, a README, or a \
+file with a poem, story or recipe, is "off_topic"
 
 "about_conversation" is true only for a "question" that the documentation cannot answer but the \
 conversation can: what the user said or asked earlier, facts about the user, their team or their \
@@ -80,6 +84,7 @@ ROUTER_EXAMPLES: list[tuple[str, str, dict]] = [
     ),
     (_ORBIT, "What was my first question?", {"intent": "question", "about_conversation": True}),
     ("(none)", "hi, what can you do?", {"intent": "smalltalk"}),
+    ("(none)", "can you walk me through how load balancers work?", {"intent": "off_topic"}),
     ("(none)", "remove the folder old_configs", {"intent": "delete_folder", "path": "old_configs"}),
 ]
 
@@ -121,14 +126,25 @@ DONT_KNOW_MARK = "don't know based on"
 SOURCES = "\n\nSources: {titles}"
 
 REFUSAL = (
-    "Sorry, I can only help with HyperAI: questions about the platform and its documentation, "
-    "and creating, editing, validating or deleting files in your IDE workspace."
+    "Sorry, I can only help with HyperAI: questions about the platform and its documentation, and "
+    "creating, editing, validating or deleting HyperAI application descriptors (YAML) and folders in "
+    "your IDE workspace."
+)
+
+NOT_A_DESCRIPTOR = (
+    "{path} is not a HyperAI application descriptor, so I will not change it. I can show, validate "
+    "or delete it, and create or edit native and device application descriptors (YAML)."
+)
+
+CANNOT_VALIDATE = (
+    "The IDE could not validate {path}: {reason}. Only HyperAI application descriptors (native or "
+    "device YAML) can be validated."
 )
 
 SMALLTALK = (
     "Hi, I'm Hyperion, the assistant of the HyperAI IDE. I can answer questions about HyperAI "
-    "and its documentation, and create, edit, validate or delete application descriptors and "
-    "other files in your workspace. Try: \"What is HyperAI?\" or \"Create a deployment YAML "
+    "and its documentation, and create, edit, validate or delete HyperAI application descriptors "
+    "(YAML) and folders in your workspace. Try: \"What is HyperAI?\" or \"Create a deployment YAML "
     "for a service using the nginx Docker image\"."
 )
 

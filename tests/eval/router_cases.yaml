@@ -182,3 +182,27 @@
 - {id: m-wipe-then-explain, category: multi_step, split: dev, text: "wipe the infra directory, and afterwards explain what an Open Connector is", expect: {intents: [delete_folder, question]}}
 - {id: m-two-and-limerick, category: multi_step, split: dev, text: "could you whip up manifests for minio and keycloak, and write a limerick about kubernetes while you're at it", expect: {intents: [create_file, create_file, off_topic]}}
 - {id: e-three-settings, category: edit, split: dev, history: *nginx, text: "double its cpu, expose 8443 too and switch it to the testing phase", expect: {intent: edit_file}}
+
+# --- Task C: scope per the mentor (only HyperAI and its descriptors) -------------------------------
+# general technology questions are off-topic
+- {id: g-kubernetes, category: general_tech, split: dev, text: "What is Kubernetes?", expect: {intent: off_topic}}
+- {id: g-docker, category: general_tech, split: dev, text: "What is Docker?", expect: {intent: off_topic}}
+- {id: g-rest, category: general_tech, split: dev, text: "explain REST APIs", expect: {intent: off_topic}}
+- {id: g-yaml, category: general_tech, split: dev, text: "what is YAML?", expect: {intent: off_topic}}
+- {id: g-tls, category: general_tech, split: test, text: "how does TLS work?", expect: {intent: off_topic}}
+- {id: g-edge-general, category: general_tech, split: test, text: "what is edge computing in general?", expect: {intent: off_topic}}
+- {id: g-microservice, category: general_tech, split: test, text: "could you describe what a microservice is?", expect: {intent: off_topic}}
+- {id: g-grpc, category: general_tech, split: test, text: "what's the deal with gRPC?", expect: {intent: off_topic}}
+# ... but questions that tie the technology to HyperAI are answered
+- {id: h-uses-kubernetes, category: question, split: dev, text: "How does HyperAI use Kubernetes?", expect: {intent: question}}
+- {id: h-dsl-yaml, category: question, split: dev, text: "What does the HyperAI DSL use YAML for?", expect: {intent: question}}
+- {id: h-docker-devicenodes, category: question, split: test, text: "what role does Docker play for HyperAI device nodes?", expect: {intent: question}}
+- {id: h-android-connectors, category: question, split: test, text: "In HyperAI, how are Android phones registered with the Open Connectors?", expect: {intent: question}}
+# only descriptors are written: generic files are refused
+- {id: f-hello-py, category: generic_file, split: dev, text: "create hello.py that prints hello world", expect: {intent: off_topic}}
+- {id: f-utils-js, category: generic_file, split: dev, text: "put a function in utils.js", expect: {intent: off_topic}}
+- {id: f-bash-script, category: generic_file, split: test, text: "write a bash script that lists files and save it as run.sh", expect: {intent: off_topic}}
+- {id: f-readme-cooking, category: generic_file, split: test, text: "add a README about cooking", expect: {intent: off_topic}}
+# IDE operations on existing non-descriptor files stay allowed
+- {id: v-validate-py, category: validate_read, split: dev, text: "validate hello.py", expect: {intent: validate_file, path: hello.py}}
+- {id: x-delete-txt, category: delete, split: test, text: "delete notes.txt", expect: {intent: delete_file, path: notes.txt}}

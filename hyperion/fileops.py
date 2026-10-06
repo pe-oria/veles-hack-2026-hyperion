@@ -8,7 +8,7 @@ from dataclasses import dataclass
 
 import yaml
 
-from hyperion import actions, ide, llm, prompts, yamlgen
+from hyperion import actions, guardrails, ide, llm, prompts, yamlgen
 from hyperion.confirm import Pending
 from hyperion.actions import PathError
 from hyperion.ide import IdeError
@@ -176,7 +176,11 @@ async def delete_folder(route: Route, text: str, session: Session) -> AsyncItera
 async def create_file(route: Route, text: str, session: Session) -> AsyncIterator[Event]:
     raw = grounded_path(route, text, session) or folder_from_text(text, session) or ""
     if raw and actions.has_extension(raw) and not actions.is_yaml(raw):
-        async for event in create_plain_file(actions.clean_path(raw), text, session):
+        path = actions.clean_path(raw)
+        if not guardrails.ALLOW_GENERIC_FILES:
+            yield prompts.REFUSAL  # only application descriptors are written, whatever the router thought
+            return
+        async for event in create_plain_file(path, text, session):
             yield event
         return
 
@@ -253,6 +257,9 @@ async def edit_file(route: Route, text: str, session: Session) -> AsyncIterator[
     file = await ide.read(target_file(route, text, session))
     session.remember_file(file.path)
     structured = actions.is_yaml(file.path)
+    if not structured and not guardrails.ALLOW_GENERIC_FILES:
+        yield prompts.NOT_A_DESCRIPTOR.format(path=file.path)
+        return
     yield f"Working on {file.path}... "  # the rewrite takes a couple of seconds
 
     errors = await reported_errors(file.path) if _FIX.search(text) else []
@@ -316,9 +323,15 @@ async def execute_pending(pending: Pending, session: Session) -> AsyncIterator[E
 async def validate_file(route: Route, text: str, session: Session) -> AsyncIterator[Event]:
     path = target_file(route, text, session)
     await ide.read(path)  # finds the backend if needed and gives the clearer "not found" message
+    # no pre-check by extension: the IDE's validator decides what it can validate
     report = await ide.validate(path)
     if report.get("path"):
         session.remember_file(report["path"])
+    if not report.get("valid") and not report.get("type"):
+        # not recognised as a descriptor at all (a Python script, a README, some other YAML)
+        reasons = "; ".join(str(error.get("message", "")) for error in report.get("errors", [])[:2])
+        yield prompts.CANNOT_VALIDATE.format(path=report.get("path", path), reason=reasons or "it is not a descriptor")
+        return
     yield format_report(report)
 
 
