@@ -130,6 +130,16 @@ NOTHING_PENDING = "There is nothing waiting for your confirmation. What would yo
 # the user answered a confirmation with something else: we drop the action and say so
 NOT_CONFIRMED = "I did not get a yes, so I left things as they were: {question}\n\n"
 
+MISSING_KEY = (
+    "Hyperion is not configured: the API_KEY environment variable is not set, so I cannot reach "
+    "the language model. Start the container with -e API_KEY=<your key>."
+)
+
+REJECTED_KEY = (
+    "Hyperion is misconfigured: the language model server rejected the API_KEY this container "
+    "was started with. Check the key and restart the container."
+)
+
 LLM_ERROR = "Sorry, I could not reach the language model. Please try again."
 
 

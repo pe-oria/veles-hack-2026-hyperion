@@ -9,6 +9,7 @@ from collections.abc import AsyncIterator
 
 import httpx
 import numpy as np
+import openai
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 
@@ -22,7 +23,7 @@ EMBED_BATCH = 32
 
 API_KEY = os.environ.get("API_KEY", "")
 if not API_KEY:
-    log.warning("API_KEY is not set - the service starts, but LLM calls will fail")
+    log.warning("API_KEY is not set - the service starts, but every chat will answer with a configuration error")
 # the client refuses to be built with an empty key
 _KEY = API_KEY or "missing"
 TIMEOUT = 90  # seconds; the shared server queues requests under load
@@ -58,6 +59,13 @@ json_llm = ChatOpenAI(
     max_completion_tokens=200,
     model_kwargs={"response_format": {"type": "json_object"}},
 )
+
+
+def is_auth_error(exc: BaseException) -> bool:
+    """Whether a failed call was the server refusing our key (chat SDK or plain-HTTP embeddings)."""
+    if isinstance(exc, openai.AuthenticationError):
+        return True
+    return isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code in (401, 403)
 
 
 async def ask_json(messages: list[tuple[str, str]]) -> dict:

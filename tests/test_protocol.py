@@ -231,5 +231,41 @@ def test_actions_are_streamed_as_their_own_events_and_kept_out_of_history(monkey
     assert session.get_session("u1").history[-1] == ("assistant", "Creating `a.yaml`. Done.")
 
 
+def test_missing_api_key_is_reported_clearly_without_calling_anything(monkeypatch, fake_llm):
+    async def route(text, sess):
+        raise AssertionError("no model call is possible without a key")
+
+    monkeypatch.setattr(llm, "API_KEY", "")
+    monkeypatch.setattr(router, "route", route)
+    assert post("What is HyperAI?") == [prompts.MISSING_KEY]
+    assert "API_KEY" in prompts.MISSING_KEY and fake_llm.calls == []
+    assert client.get("/health").status_code == 200  # the service itself stays up
+
+
+def test_rejected_api_key_is_reported_clearly(monkeypatch):
+    import httpx
+    import openai
+
+    async def rejected(text, sess):
+        response = httpx.Response(401, request=httpx.Request("POST", "https://legion1.di.uoa.gr/v1/chat/completions"))
+        raise openai.AuthenticationError("bad key", response=response, body=None)
+
+    monkeypatch.setattr(router, "route", rejected)
+    assert post("What is HyperAI?") == [prompts.REJECTED_KEY]
+    assert session.get_session("u1").history == []
+
+
+def test_error_after_partial_output_starts_on_its_own_line(monkeypatch):
+    class Dies:
+        async def astream(self, messages):
+            yield FakeChunk("The connectors manage edge devices")
+            raise RuntimeError("connection dropped")
+
+    monkeypatch.setattr(llm, "chat_llm", Dies())
+    set_route(monkeypatch, intent="question")
+    reply = text_of(post("What are Open Connectors?"))
+    assert reply.endswith("\n\n" + prompts.LLM_ERROR) and reply.startswith("The connectors")
+
+
 def test_chat_rejects_malformed_body():
     assert client.post("/chat", json={"text": "hi"}).status_code == 422

@@ -164,6 +164,10 @@ uv run python -m hyperion.rag
 docker buildx build --platform linux/amd64,linux/arm64 -t <dockerhub-user>/hyperion:latest --push .
 ```
 
+The API key is never baked into the image; it is injected at runtime (`-e API_KEY=...` or
+`env_file`). Without it the service still starts and `/health` answers, and every chat replies with
+a configuration error naming `API_KEY`; a key the server rejects gets its own message.
+
 Configuration (environment variables): `API_KEY` (required for LLM calls), `IDE_BACKEND_URL`
 (default `http://localhost:3001/api`, `http://host.docker.internal:3001/api` in the image),
 `IDE_APPLY_TIMEOUT` (seconds to wait for the IDE to save a file before skipping validation, default 4).

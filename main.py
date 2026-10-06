@@ -149,6 +149,12 @@ async def generate_reply(request: ChatRequest) -> AsyncIterator[str]:
     started = time.perf_counter()
     reply: list[str] = []
     done: list[str] = []
+    if not llm.API_KEY:
+        # every path needs the model: say what is wrong instead of failing on the first call
+        log.error("API_KEY is not set - answering with a configuration error")
+        yield sse({"response": prompts.MISSING_KEY})
+        yield "data: [DONE]\n\n"
+        return
     try:
         async for event in run_turn(request.text, session):
             if isinstance(event, dict):
@@ -157,10 +163,13 @@ async def generate_reply(request: ChatRequest) -> AsyncIterator[str]:
             else:
                 reply.append(event)
                 yield sse({"response": event})
-    except Exception:
+    except Exception as exc:
         log.exception("turn failed for user %s", request.user_id)
-        reply.append(prompts.LLM_ERROR)
-        yield sse({"response": prompts.LLM_ERROR})
+        message = prompts.REJECTED_KEY if llm.is_auth_error(exc) else prompts.LLM_ERROR
+        # text already streamed stays on screen: start the error on its own line
+        message = ("\n\n" if reply else "") + message
+        reply.append(message)
+        yield sse({"response": message})
     else:
         # the model imitates a "Sources:" line it sees in its own earlier answers
         session.add_turn(request.text, "".join(reply).split(llm.SOURCES_MARK)[0].rstrip())

@@ -12,6 +12,13 @@ You are the engineer on this project. Read this whole file before writing code.
   written during the event.
 - **Secrets:** `API_KEY` lives in `.env`. The starter repo *tracks* `.env` — make sure `.env` is in
   `.gitignore` and never pushed. Ship `.env.example` instead.
+- **API key is NOT baked into the image.** Starter `.dockerignore` excludes `.env`; compose injects it at
+  runtime (`env_file: .env`), i.e. `docker run -e API_KEY=... -p 8000:8000 <image>`. Read it with
+  `os.environ["API_KEY"]`; if missing, stream a clear error instead of crashing. **Confirmed by mentor:
+  evaluators inject their own key at runtime — never bake a key into the image.** Image tag goes to
+  Michael on Discord in the form `username/image_repo:tag`.
+- **Starter Dockerfile only copies `main.py helpers.py`.** Add `COPY hyperion/ ./hyperion/` and
+  `COPY knowledge/ ./knowledge/` (and any prebuilt RAG index) or the image will break.
 - Starter: https://gitlab.eclipse.org/eclipse-research-labs/hyper-ai-project/hyperion-starter
   (FastAPI, `uv`, Python ≥ 3.14, `langchain-openai`). Use `uv`, not the old `veles` conda env.
 
