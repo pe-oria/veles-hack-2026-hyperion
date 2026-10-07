@@ -80,7 +80,9 @@ Delete nginx.yaml? (yes/no)
 Deleted nginx.yaml.
 ```
 
-<!-- TODO: demo GIF recorded in the IDE -->
+![Hyperion demo in the HyperAI IDE](docs/demo.gif)
+
+*55-second cut, sped up 1.5x: RAG answer with sources, guardrail refusals, a two-step request, an edit by memory, and a confirmed delete. Full-quality video: [docs/demo.mp4](docs/demo.mp4).*
 
 ## Architecture
 
